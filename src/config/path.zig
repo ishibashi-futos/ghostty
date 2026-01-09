@@ -145,7 +145,7 @@ pub const Path = union(enum) {
         // Check if the path starts with a tilde and expand it to the
         // home directory. We explicitly look for "~/"
         // because we don't support alternate users such as "~alice/"
-        if (std.mem.startsWith(u8, path, "~/") or std.mem.startsWith(u8, path, "~\\")) expand: {
+        if (std.mem.startsWith(u8, path, "~/") or std.mem.startsWith(u8, path, "~\\")) {
 
             const expanded: []const u8 = internal_os.expandHome(
                 path,

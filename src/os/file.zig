@@ -58,9 +58,10 @@ pub fn restoreMaxFiles(lim: rlimit) void {
 /// This may not actually allocate memory, use freeTmpDir to properly
 /// free the memory when applicable.
 pub fn allocTmpDir(allocator: std.mem.Allocator) ?[]const u8 {
-    if (env_os.tempDir(allocator)) |value| {
+    const tmp = env_os.tempDir(allocator) catch null;
+    if (tmp) |value| {
         return value.value;
-    } else |_| {}
+    }
 
     if (builtin.os.tag == .windows) return null;
     if (posix.getenv("TMPDIR")) |v| return v;

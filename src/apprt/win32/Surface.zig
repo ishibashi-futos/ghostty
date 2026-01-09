@@ -8,6 +8,7 @@ const configpkg = @import("../../config.zig");
 const Config = configpkg.Config;
 const CoreSurface = @import("../../Surface.zig");
 const App = @import("App.zig");
+const angle = @import("angle.zig");
 
 const CF_UNICODETEXT: win.UINT = 13;
 const GMEM_MOVEABLE: win.UINT = 0x0002;
@@ -78,12 +79,14 @@ const user32 = struct {
 rt_app: *App,
 core_surface: CoreSurface = undefined,
 initialized: bool = false,
+angle_ctx: ?angle.Context = null,
 
 pub fn init(self: *Surface, app: *App, config: *const Config) !void {
     self.* = .{
         .rt_app = app,
         .core_surface = undefined,
         .initialized = false,
+        .angle_ctx = null,
     };
 
     try app.core_app.addSurface(self);
@@ -108,11 +111,28 @@ pub fn deinit(self: *Surface) void {
         self.core_surface.deinit();
         self.initialized = false;
     }
+    if (self.angle_ctx) |*ctx| {
+        ctx.deinit();
+        self.angle_ctx = null;
+    }
     self.rt_app.core_app.deleteSurface(self);
 }
 
 pub fn rtApp(self: *Surface) *App {
     return self.rt_app;
+}
+
+pub fn ensureAngleContext(self: *Surface) !*angle.Context {
+    if (self.angle_ctx) |*ctx| return ctx;
+    const hwnd = self.rt_app.hwnd orelse return error.AngleMissingWindow;
+    self.angle_ctx = try angle.Context.init(hwnd);
+    return &self.angle_ctx.?;
+}
+
+pub fn angleSwapBuffers(self: *Surface) void {
+    if (self.angle_ctx) |*ctx| {
+        ctx.swapBuffers();
+    }
 }
 
 pub fn close(self: *Surface, process_active: bool) void {

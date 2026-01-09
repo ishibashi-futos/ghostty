@@ -38,6 +38,7 @@ pub const MIN_VERSION_MAJOR = 4;
 pub const MIN_VERSION_MINOR = 3;
 
 alloc: std.mem.Allocator,
+rt_surface: *apprt.Surface,
 
 /// Alpha blending mode
 blending: configpkg.Config.AlphaBlending,
@@ -52,6 +53,7 @@ pub fn init(alloc: Allocator, opts: rendererpkg.Options) error{}!OpenGL {
     return .{
         .alloc = alloc,
         .blending = opts.config.blending,
+        .rt_surface = opts.rt_surface,
     };
 }
 
@@ -160,8 +162,6 @@ fn prepareContext(getProcAddress: anytype) !void {
 
 /// This is called early right after surface creation.
 pub fn surfaceInit(surface: *apprt.Surface) !void {
-    _ = surface;
-
     switch (apprt.runtime) {
         else => @compileError("unsupported app runtime for OpenGL"),
 
@@ -176,8 +176,13 @@ pub fn surfaceInit(surface: *apprt.Surface) !void {
         },
 
         apprt.win32 => {
-            // Win32 rendering is wired up separately (ANGLE/Vulkan preferred).
-            // Leave as a no-op to allow builds until a backend is selected.
+            const backend = surface.rtApp().render_backend;
+            if (backend != .angle) {
+                log.warn("win32 renderer backend not implemented: {s}", .{@tagName(backend)});
+                return error.UnsupportedBackend;
+            }
+            const ctx = try surface.ensureAngleContext();
+            try prepareContext(ctx.getProcAddress());
         },
     }
 
@@ -341,6 +346,11 @@ pub fn present(self: *OpenGL, target: Target) !void {
 
     // Keep track of this target in case we need to repeat it.
     self.last_target = target;
+
+    switch (apprt.runtime) {
+        apprt.win32 => self.rt_surface.angleSwapBuffers(),
+        else => {},
+    }
 }
 
 /// Present the last presented target again.

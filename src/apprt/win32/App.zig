@@ -11,6 +11,7 @@ const Config = configpkg.Config;
 const CoreApp = @import("../../App.zig");
 const ipc_windows = @import("../ipc_windows.zig");
 const Surface = @import("Surface.zig");
+const render_backend_pkg = @import("render_backend.zig");
 
 const log = std.log.scoped(.win32);
 
@@ -212,6 +213,7 @@ const user32 = struct {
 
 core_app: *CoreApp,
 config: Config,
+render_backend: render_backend_pkg.Backend,
 hinstance: ?win.HINSTANCE = null,
 hwnd: ?win.HWND = null,
 surface: ?*Surface = null,
@@ -233,11 +235,13 @@ pub fn init(
     self.* = .{
         .core_app = core_app,
         .config = config,
+        .render_backend = render_backend_pkg.selectDefault(),
         .hinstance = hinstance,
         .hwnd = null,
         .surface = null,
     };
     errdefer self.config.deinit();
+    log.info("win32 renderer backend={s}", .{@tagName(self.render_backend)});
 
     _ = user32.SetProcessDpiAwarenessContext(
         DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,

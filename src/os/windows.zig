@@ -55,7 +55,7 @@ pub const exp = struct {
             hWritePipe: *windows.HANDLE,
             lpPipeAttributes: ?*const windows.SECURITY_ATTRIBUTES,
             nSize: windows.DWORD,
-        ) callconv(windows.WINAPI) windows.BOOL;
+        ) callconv(.winapi) windows.BOOL;
         pub extern "kernel32" fn CreateNamedPipeW(
             lpName: windows.LPCWSTR,
             dwOpenMode: windows.DWORD,
@@ -65,14 +65,14 @@ pub const exp = struct {
             nInBufferSize: windows.DWORD,
             nDefaultTimeOut: windows.DWORD,
             lpSecurityAttributes: ?*windows.SECURITY_ATTRIBUTES,
-        ) callconv(windows.WINAPI) windows.HANDLE;
+        ) callconv(.winapi) windows.HANDLE;
         pub extern "kernel32" fn ConnectNamedPipe(
             hNamedPipe: windows.HANDLE,
             lpOverlapped: ?*anyopaque,
-        ) callconv(windows.WINAPI) windows.BOOL;
+        ) callconv(.winapi) windows.BOOL;
         pub extern "kernel32" fn DisconnectNamedPipe(
             hNamedPipe: windows.HANDLE,
-        ) callconv(windows.WINAPI) windows.BOOL;
+        ) callconv(.winapi) windows.BOOL;
         pub extern "kernel32" fn CreateFileW(
             lpFileName: windows.LPCWSTR,
             dwDesiredAccess: windows.DWORD,
@@ -81,26 +81,26 @@ pub const exp = struct {
             dwCreationDisposition: windows.DWORD,
             dwFlagsAndAttributes: windows.DWORD,
             hTemplateFile: ?windows.HANDLE,
-        ) callconv(windows.WINAPI) windows.HANDLE;
+        ) callconv(.winapi) windows.HANDLE;
         pub extern "kernel32" fn WaitNamedPipeW(
             lpNamedPipeName: windows.LPCWSTR,
             nTimeOut: windows.DWORD,
-        ) callconv(windows.WINAPI) windows.BOOL;
+        ) callconv(.winapi) windows.BOOL;
         pub extern "kernel32" fn CreatePseudoConsole(
             size: windows.COORD,
             hInput: windows.HANDLE,
             hOutput: windows.HANDLE,
             dwFlags: windows.DWORD,
             phPC: *HPCON,
-        ) callconv(windows.WINAPI) windows.HRESULT;
-        pub extern "kernel32" fn ResizePseudoConsole(hPC: HPCON, size: windows.COORD) callconv(windows.WINAPI) windows.HRESULT;
-        pub extern "kernel32" fn ClosePseudoConsole(hPC: HPCON) callconv(windows.WINAPI) void;
+        ) callconv(.winapi) windows.HRESULT;
+        pub extern "kernel32" fn ResizePseudoConsole(hPC: HPCON, size: windows.COORD) callconv(.winapi) windows.HRESULT;
+        pub extern "kernel32" fn ClosePseudoConsole(hPC: HPCON) callconv(.winapi) void;
         pub extern "kernel32" fn InitializeProcThreadAttributeList(
             lpAttributeList: LPPROC_THREAD_ATTRIBUTE_LIST,
             dwAttributeCount: windows.DWORD,
             dwFlags: windows.DWORD,
             lpSize: *windows.SIZE_T,
-        ) callconv(windows.WINAPI) windows.BOOL;
+        ) callconv(.winapi) windows.BOOL;
         pub extern "kernel32" fn UpdateProcThreadAttribute(
             lpAttributeList: LPPROC_THREAD_ATTRIBUTE_LIST,
             dwFlags: windows.DWORD,
@@ -109,7 +109,7 @@ pub const exp = struct {
             cbSize: windows.SIZE_T,
             lpPreviousValue: ?windows.PVOID,
             lpReturnSize: ?*windows.SIZE_T,
-        ) callconv(windows.WINAPI) windows.BOOL;
+        ) callconv(.winapi) windows.BOOL;
         pub extern "kernel32" fn PeekNamedPipe(
             hNamedPipe: windows.HANDLE,
             lpBuffer: ?windows.LPVOID,
@@ -117,7 +117,7 @@ pub const exp = struct {
             lpBytesRead: ?*windows.DWORD,
             lpTotalBytesAvail: ?*windows.DWORD,
             lpBytesLeftThisMessage: ?*windows.DWORD,
-        ) callconv(windows.WINAPI) windows.BOOL;
+        ) callconv(.winapi) windows.BOOL;
         // Duplicated here because lpCommandLine is not marked optional in zig std
         pub extern "kernel32" fn CreateProcessW(
             lpApplicationName: ?windows.LPWSTR,
@@ -130,7 +130,7 @@ pub const exp = struct {
             lpCurrentDirectory: ?windows.LPWSTR,
             lpStartupInfo: *windows.STARTUPINFOW,
             lpProcessInformation: *windows.PROCESS_INFORMATION,
-        ) callconv(windows.WINAPI) windows.BOOL;
+        ) callconv(.winapi) windows.BOOL;
     };
 
     pub const shell32 = struct {
@@ -141,7 +141,7 @@ pub const exp = struct {
             lpParameters: ?windows.LPCWSTR,
             lpDirectory: ?windows.LPCWSTR,
             nShowCmd: windows.INT,
-        ) callconv(windows.WINAPI) windows.HINSTANCE;
+        ) callconv(.winapi) windows.HINSTANCE;
     };
 
     pub const PIPE_ACCESS_DUPLEX = 0x00000003;
@@ -150,9 +150,9 @@ pub const exp = struct {
     pub const PIPE_TYPE_BYTE = 0x00000000;
     pub const PIPE_WAIT = 0x00000000;
 
-    pub const ERROR_FILE_NOT_FOUND: windows.DWORD = 2;
-    pub const ERROR_PIPE_BUSY: windows.DWORD = 231;
-    pub const ERROR_PIPE_CONNECTED: windows.DWORD = 535;
+    pub const ERROR_FILE_NOT_FOUND: windows.Win32Error = .FILE_NOT_FOUND;
+    pub const ERROR_PIPE_BUSY: windows.Win32Error = .PIPE_BUSY;
+    pub const ERROR_PIPE_CONNECTED: windows.Win32Error = .PIPE_CONNECTED;
 
     pub const PROC_THREAD_ATTRIBUTE_NUMBER = 0x0000FFFF;
     pub const PROC_THREAD_ATTRIBUTE_THREAD = 0x00010000;

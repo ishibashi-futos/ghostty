@@ -77,14 +77,16 @@ pub const Server = struct {
         }
 
         var file = std.fs.File{ .handle = self.handle };
+        var read_buf: [4096]u8 = undefined;
+        var reader = file.reader(&read_buf);
         var len_buf: [4]u8 = undefined;
-        try file.reader().readNoEof(&len_buf);
+        try reader.interface.readNoEof(&len_buf);
         const payload_len = std.mem.readInt(u32, len_buf[0..], .little);
         if (payload_len == 0 or payload_len > 256 * 1024) return error.InvalidMessage;
 
         const payload = try alloc.alloc(u8, payload_len);
         defer alloc.free(payload);
-        try file.reader().readNoEof(payload);
+        try reader.interface.readNoEof(payload);
 
         _ = windows.exp.kernel32.DisconnectNamedPipe(self.handle);
         return try decodeRequest(alloc, payload);
@@ -105,13 +107,15 @@ pub fn sendNewWindow(
     const payload = try encodeNewWindow(alloc, value);
     defer alloc.free(payload);
 
-    var writer = file.writer();
-    try writer.writeIntLittle(u32, @intCast(payload.len));
-    try writer.writeAll(payload);
+    var write_buf: [4096]u8 = undefined;
+    var writer = file.writer(&write_buf);
+    try writer.interface.writeInt(u32, @intCast(payload.len), .little);
+    try writer.interface.writeAll(payload);
+    try writer.interface.flush();
     return true;
 }
 
-fn openPipe(alloc: Allocator, target: ipc.Target) !?windows.HANDLE {
+fn openPipe(alloc: Allocator, target: ipc.Target) (Allocator.Error || ipc.Errors)!?windows.HANDLE {
     const name = try pipeNameForTarget(alloc, target);
     defer alloc.free(name);
 
@@ -158,58 +162,61 @@ fn openPipe(alloc: Allocator, target: ipc.Target) !?windows.HANDLE {
     return handle;
 }
 
-fn pipeNameForTarget(alloc: Allocator, target: ipc.Target) ![:0]const u16 {
+fn pipeNameForTarget(alloc: Allocator, target: ipc.Target) (Allocator.Error || ipc.Errors)![:0]const u16 {
     return switch (target) {
         .class => |class| pipeName(alloc, class),
         .detect => pipeName(alloc, default_class),
     };
 }
 
-fn pipeName(alloc: Allocator, class: []const u8) ![:0]const u16 {
+fn pipeName(alloc: Allocator, class: []const u8) (Allocator.Error || ipc.Errors)![:0]const u16 {
     const safe_class = try sanitizePipeComponent(alloc, class);
     defer alloc.free(safe_class);
 
     const name = try std.fmt.allocPrint(alloc, "{s}{s}", .{ pipe_prefix, safe_class });
     defer alloc.free(name);
 
-    return std.unicode.utf8ToUtf16LeAllocZ(alloc, name);
+    return std.unicode.utf8ToUtf16LeAllocZ(alloc, name) catch |err| switch (err) {
+        error.InvalidUtf8 => error.IPCFailed,
+        error.OutOfMemory => error.OutOfMemory,
+    };
 }
 
 fn sanitizePipeComponent(alloc: Allocator, input: []const u8) ![]u8 {
-    var out = std.ArrayList(u8).init(alloc);
-    errdefer out.deinit();
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(alloc);
 
     for (input) |c| {
         switch (c) {
-            '\\', '/', ':', '*', '?', '"', '<', '>', '|' => try out.append('_'),
-            else => try out.append(c),
+            '\\', '/', ':', '*', '?', '"', '<', '>', '|' => try out.append(alloc, '_'),
+            else => try out.append(alloc, c),
         }
     }
 
-    return try out.toOwnedSlice();
+    return try out.toOwnedSlice(alloc);
 }
 
 fn encodeNewWindow(alloc: Allocator, value: ipc.Action.NewWindow) ![]u8 {
-    var out = std.ArrayList(u8).init(alloc);
-    errdefer out.deinit();
-    var writer = out.writer();
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(alloc);
+    var writer = out.writer(alloc);
 
-    try writer.writeIntLittle(u32, @intFromEnum(ipc.Action.Key.new_window));
+    try writer.writeInt(u32, @intFromEnum(ipc.Action.Key.new_window), .little);
 
     const argc: u32 = if (value.arguments) |arguments|
         @intCast(arguments.len)
     else
         0;
-    try writer.writeIntLittle(u32, argc);
+    try writer.writeInt(u32, argc, .little);
 
     if (value.arguments) |arguments| {
         for (arguments) |arg| {
-            try writer.writeIntLittle(u32, @intCast(arg.len));
+            try writer.writeInt(u32, @intCast(arg.len), .little);
             try writer.writeAll(arg);
         }
     }
 
-    return try out.toOwnedSlice();
+    return try out.toOwnedSlice(alloc);
 }
 
 fn decodeRequest(alloc: Allocator, payload: []const u8) !Request {

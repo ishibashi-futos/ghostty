@@ -70,6 +70,19 @@ pub fn init(b: *std.Build, appVersion: []const u8) !Config {
     const target = target: {
         var result = b.standardTargetOptions(.{});
 
+        // Zig doesn't bundle the MSVC SDK on non-Windows hosts, so a
+        // windows-msvc target will fail to find libc headers and libs.
+        // Fall back to mingw so cross builds keep working.
+        if (result.result.os.tag == .windows and
+            result.result.abi == .msvc and
+            builtin.target.os.tag != .windows)
+        {
+            var query = result.query;
+            query.abi = .gnu;
+            result = b.resolveTargetQuery(query);
+            std.log.warn("msvc target requested on non-Windows host; falling back to windows-gnu", .{});
+        }
+
         // If we're building for macOS and we're on macOS, we need to
         // use a generic target to workaround compilation issues.
         if (result.result.os.tag == .macos and

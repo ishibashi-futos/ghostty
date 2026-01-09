@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const fs = std.fs;
 const Allocator = std.mem.Allocator;
 const args = @import("args.zig");
@@ -96,16 +97,18 @@ pub fn runInner(
 
     if (opts.add) |host| {
         const result = cache.add(alloc, host) catch |err| switch (err) {
-            DiskCache.Error.HostnameIsInvalid => {
+            error.HostnameIsInvalid => {
                 try stderr.print("Error: Invalid hostname format '{s}'\n", .{host});
                 try stderr.print("Expected format: hostname or user@hostname\n", .{});
                 return 1;
             },
-            DiskCache.Error.CacheIsLocked => {
-                try stderr.print("Error: Cache is busy, try again\n", .{});
-                return 1;
-            },
             else => {
+                if (comptime builtin.os.tag != .windows) {
+                    if (err == error.CacheIsLocked) {
+                        try stderr.print("Error: Cache is busy, try again\n", .{});
+                        return 1;
+                    }
+                }
                 try stderr.print(
                     "Error: Unable to add '{s}' to cache. Error: {}\n",
                     .{ host, err },
@@ -123,16 +126,18 @@ pub fn runInner(
 
     if (opts.remove) |host| {
         cache.remove(alloc, host) catch |err| switch (err) {
-            DiskCache.Error.HostnameIsInvalid => {
+            error.HostnameIsInvalid => {
                 try stderr.print("Error: Invalid hostname format '{s}'\n", .{host});
                 try stderr.print("Expected format: hostname or user@hostname\n", .{});
                 return 1;
             },
-            DiskCache.Error.CacheIsLocked => {
-                try stderr.print("Error: Cache is busy, try again\n", .{});
-                return 1;
-            },
             else => {
+                if (comptime builtin.os.tag != .windows) {
+                    if (err == error.CacheIsLocked) {
+                        try stderr.print("Error: Cache is busy, try again\n", .{});
+                        return 1;
+                    }
+                }
                 try stderr.print(
                     "Error: Unable to remove '{s}' from cache. Error: {}\n",
                     .{ host, err },

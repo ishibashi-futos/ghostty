@@ -1299,7 +1299,7 @@ pub fn SplitTree(comptime V: type) type {
                 },
             ),
 
-            .none => void,
+            .none, .win32 => void,
         };
     };
 }

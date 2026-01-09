@@ -22,6 +22,21 @@ pub const Availability = struct {
     wgl: bool,
 };
 
+pub const Implementation = struct {
+    angle: bool = true,
+    vulkan: bool = false,
+    wgl: bool = false,
+};
+
+pub fn isImplemented(backend: Backend) bool {
+    const impl: Implementation = .{};
+    return switch (backend) {
+        .angle => impl.angle,
+        .vulkan => impl.vulkan,
+        .wgl => impl.wgl,
+    };
+}
+
 pub fn detectAvailability() Availability {
     const angle = dllAvailable(angle_egl) and dllAvailable(angle_gles);
     const vulkan = dllAvailable(vulkan_loader);
@@ -31,6 +46,9 @@ pub fn detectAvailability() Availability {
 
 pub fn selectDefault() Backend {
     const availability = detectAvailability();
+    if (availability.angle and isImplemented(.angle)) return .angle;
+    if (availability.vulkan and isImplemented(.vulkan)) return .vulkan;
+    if (availability.wgl and isImplemented(.wgl)) return .wgl;
     if (availability.angle) return .angle;
     if (availability.vulkan) return .vulkan;
     return .wgl;

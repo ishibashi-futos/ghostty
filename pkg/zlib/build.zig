@@ -32,8 +32,10 @@ pub fn build(b: *std.Build) !void {
             "-DHAVE_SYS_TYPES_H",
             "-DHAVE_STDINT_H",
             "-DHAVE_STDDEF_H",
-            "-DZ_HAVE_UNISTD_H",
         });
+        if (target.result.os.tag != .windows) {
+            try flags.append(b.allocator, "-DZ_HAVE_UNISTD_H");
+        }
         lib.addCSourceFiles(.{
             .root = upstream.path(""),
             .files = srcs,

@@ -181,17 +181,19 @@ pub fn init(b: *std.Build, appVersion: []const u8) !Config {
         break :simd true;
     };
 
+    const gtk_wayland_default = if (target.result.os.tag == .windows) false else gtk_targets.wayland;
+    const gtk_x11_default = if (target.result.os.tag == .windows) false else gtk_targets.x11;
     config.wayland = b.option(
         bool,
         "gtk-wayland",
         "Enables linking against Wayland libraries when using the GTK rendering backend.",
-    ) orelse gtk_targets.wayland;
+    ) orelse gtk_wayland_default;
 
     config.x11 = b.option(
         bool,
         "gtk-x11",
         "Enables linking against X11 libraries when using the GTK rendering backend.",
-    ) orelse gtk_targets.x11;
+    ) orelse gtk_x11_default;
 
     config.i18n = b.option(
         bool,
@@ -461,8 +463,9 @@ pub fn init(b: *std.Build, appVersion: []const u8) !Config {
         // as they require additional ldconfig of library paths or
         // patching the rpath of the program to discover the dynamic library
         // at runtime
+        const gtk_default = if (target.result.os.tag == .windows) false else true;
         for (&[_][]const u8{"gtk4-layer-shell"}) |dep| {
-            _ = b.systemIntegrationOption(dep, .{ .default = true });
+            _ = b.systemIntegrationOption(dep, .{ .default = gtk_default });
         }
     }
 

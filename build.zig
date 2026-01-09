@@ -140,8 +140,16 @@ pub fn build(b: *std.Build) !void {
         // build on macOS this way ironically so we need to fix that.
         if (!config.target.result.os.tag.isDarwin()) {
             libghostty_shared.installHeader(); // Only need one header
-            libghostty_shared.install("libghostty.so");
-            libghostty_static.install("libghostty.a");
+            const shared_name = switch (config.target.result.os.tag) {
+                .windows => "ghostty.dll",
+                else => "libghostty.so",
+            };
+            const static_name = switch (config.target.result.os.tag) {
+                .windows => "ghostty.lib",
+                else => "libghostty.a",
+            };
+            libghostty_shared.install(shared_name);
+            libghostty_static.install(static_name);
         }
     }
 

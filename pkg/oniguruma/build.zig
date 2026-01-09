@@ -79,20 +79,21 @@ fn buildLib(b: *std.Build, module: *std.Build.Module, options: anytype) !*std.Bu
         lib.addIncludePath(upstream.path("src"));
         module.addIncludePath(upstream.path("src"));
 
+        const is_windows = target.result.os.tag == .windows;
         lib.addConfigHeader(b.addConfigHeader(.{
             .style = .{ .cmake = upstream.path("src/config.h.cmake.in") },
         }, .{
             .PACKAGE = "oniguruma",
             .PACKAGE_VERSION = "6.9.9",
             .VERSION = "6.9.9",
-            .HAVE_ALLOCA = true,
-            .HAVE_ALLOCA_H = true,
+            .HAVE_ALLOCA = !is_windows,
+            .HAVE_ALLOCA_H = !is_windows,
             .USE_CRNL_AS_LINE_TERMINATOR = false,
             .HAVE_STDINT_H = true,
-            .HAVE_SYS_TIMES_H = true,
-            .HAVE_SYS_TIME_H = true,
+            .HAVE_SYS_TIMES_H = !is_windows,
+            .HAVE_SYS_TIME_H = !is_windows,
             .HAVE_SYS_TYPES_H = true,
-            .HAVE_UNISTD_H = true,
+            .HAVE_UNISTD_H = !is_windows,
             .HAVE_INTTYPES_H = true,
             .SIZEOF_INT = t.cTypeByteSize(.int),
             .SIZEOF_LONG = t.cTypeByteSize(.long),

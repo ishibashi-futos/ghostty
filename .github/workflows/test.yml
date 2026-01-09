@@ -27,6 +27,7 @@ jobs:
       - build-macos-freetype
       - build-snap
       - build-windows
+      - build-windows-artifact
       - test
       - test-simd
       - test-gtk
@@ -585,6 +586,49 @@ jobs:
       - name: Dump logs
         shell: pwsh
         run: Get-Content -Path ".\build.log"
+
+  build-windows-artifact:
+    runs-on: windows-2022
+    timeout-minutes: 45
+    needs: test
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
+
+      - name: Install zig
+        shell: pwsh
+        run: |
+          # Get the zig version from build.zig.zon so that it only needs to be updated
+          $fileContent = Get-Content -Path "build.zig.zon" -Raw
+          $pattern = 'minimum_zig_version\s*=\s*"([^"]+)"'
+          $zigVersion = [regex]::Match($fileContent, $pattern).Groups[1].Value
+          $version = "zig-x86_64-windows-$zigVersion"
+          Write-Output $version
+          $uri = "https://ziglang.org/download/$zigVersion/$version.zip"
+          Invoke-WebRequest -Uri "$uri" -OutFile ".\zig-windows.zip"
+          Expand-Archive -Path ".\zig-windows.zip" -DestinationPath ".\" -Force
+          Remove-Item -Path ".\zig-windows.zip"
+          Rename-Item -Path ".\$version" -NewName ".\zig"
+          Write-Host "Zig installed."
+          .\zig\zig.exe version
+
+      - name: Build Windows
+        shell: pwsh
+        run: .\zig\zig.exe build
+
+      - name: Package build
+        shell: pwsh
+        run: |
+          if (Test-Path ".\\ghostty-windows-build.zip") {
+            Remove-Item -Path ".\\ghostty-windows-build.zip"
+          }
+          Compress-Archive -Path ".\\zig-out\\*" -DestinationPath ".\\ghostty-windows-build.zip"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: ghostty-windows-build
+          path: ghostty-windows-build.zip
 
   test:
     if: github.repository == 'ghostty-org/ghostty'

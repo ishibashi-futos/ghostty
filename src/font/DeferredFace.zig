@@ -15,6 +15,7 @@ const options = @import("main.zig").options;
 const Library = @import("main.zig").Library;
 const Face = @import("main.zig").Face;
 const Presentation = @import("main.zig").Presentation;
+const Variation = font.face.Variation;
 
 const log = std.log.scoped(.deferred_face);
 
@@ -25,6 +26,10 @@ fc: if (options.backend == .fontconfig_freetype) ?Fontconfig else void =
 /// CoreText
 ct: if (font.Discover == font.discovery.CoreText) ?CoreText else void =
     if (font.Discover == font.discovery.CoreText) null else {},
+
+/// DirectWrite
+dw: if (options.backend == .directwrite_freetype) ?DirectWrite else void =
+    if (options.backend == .directwrite_freetype) null else {},
 
 /// Canvas
 wc: if (options.backend == .web_canvas) ?WebCanvas else void =
@@ -84,9 +89,27 @@ pub const WebCanvas = struct {
     }
 };
 
+/// DirectWrite specific data. This is only present when building with DirectWrite.
+pub const DirectWrite = struct {
+    alloc: Allocator,
+    path: [:0]const u8,
+    face_index: i32,
+    family: [:0]const u8,
+    style: [:0]const u8,
+    variations: []const Variation,
+
+    pub fn deinit(self: *DirectWrite) void {
+        self.alloc.free(self.path);
+        self.alloc.free(self.family);
+        self.alloc.free(self.style);
+        self.* = undefined;
+    }
+};
+
 pub fn deinit(self: *DeferredFace) void {
     switch (options.backend) {
         .fontconfig_freetype => if (self.fc) |*fc| fc.deinit(),
+        .directwrite_freetype => if (self.dw) |*dw| dw.deinit(),
         .freetype => {},
         .web_canvas => if (self.wc) |*wc| wc.deinit(),
         .coretext,
@@ -105,6 +128,8 @@ pub fn familyName(self: DeferredFace, buf: []u8) ![]const u8 {
 
         .fontconfig_freetype => if (self.fc) |fc|
             return (try fc.pattern.get(.family, 0)).string,
+
+        .directwrite_freetype => if (self.dw) |dw| return dw.family,
 
         .coretext,
         .coretext_freetype,
@@ -133,6 +158,8 @@ pub fn name(self: DeferredFace, buf: []u8) ![]const u8 {
 
         .fontconfig_freetype => if (self.fc) |fc|
             return (try fc.pattern.get(.fullname, 0)).string,
+
+        .directwrite_freetype => if (self.dw) |dw| return dw.style,
 
         .coretext,
         .coretext_freetype,
@@ -164,6 +191,7 @@ pub fn load(
 ) !Face {
     return switch (options.backend) {
         .fontconfig_freetype => try self.loadFontconfig(lib, opts),
+        .directwrite_freetype => try self.loadDirectWrite(lib, opts),
         .coretext, .coretext_harfbuzz, .coretext_noshape => try self.loadCoreText(lib, opts),
         .coretext_freetype => try self.loadCoreTextFreetype(lib, opts),
         .web_canvas => try self.loadWebCanvas(opts),
@@ -188,6 +216,18 @@ fn loadFontconfig(
     var face = try Face.initFile(lib, filename, face_index, opts);
     errdefer face.deinit();
     try face.setVariations(fc.variations, opts);
+    return face;
+}
+
+fn loadDirectWrite(
+    self: *DeferredFace,
+    lib: Library,
+    opts: font.face.Options,
+) !Face {
+    const dw = self.dw.?;
+    var face = try Face.initFile(lib, dw.path, dw.face_index, opts);
+    errdefer face.deinit();
+    try face.setVariations(dw.variations, opts);
     return face;
 }
 
@@ -265,6 +305,7 @@ fn loadWebCanvas(
 /// the face is always expected to be loaded.
 pub fn hasCodepoint(self: DeferredFace, cp: u32, p: ?Presentation) bool {
     switch (options.backend) {
+        .directwrite_freetype => return true,
         .fontconfig_freetype => {
             // If we are using fontconfig, use the fontconfig metadata to
             // avoid loading the face.

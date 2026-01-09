@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const assert = @import("../quirks.zig").inlineAssert;
 const fontconfig = @import("fontconfig");
@@ -15,6 +16,7 @@ const log = std.log.scoped(.discovery);
 pub const Discover = switch (options.backend) {
     .freetype => void, // no discovery
     .fontconfig_freetype => Fontconfig,
+    .directwrite_freetype => DirectWrite,
     .web_canvas => void, // no discovery
     .coretext,
     .coretext_freetype,
@@ -875,6 +877,546 @@ pub const CoreText = struct {
                     .variations = self.variations,
                 },
             };
+        }
+    };
+};
+
+pub const DirectWrite = struct {
+    const win = std.os.windows;
+
+    factory: *IDWriteFactory,
+    collection: *IDWriteFontCollection,
+
+    pub fn init() !DirectWrite {
+        if (comptime builtin.os.tag != .windows) return error.UnsupportedPlatform;
+
+        const factory = try createFactory();
+        errdefer factory.release();
+
+        const collection = try factory.getSystemFontCollection();
+        errdefer collection.release();
+
+        return .{
+            .factory = factory,
+            .collection = collection,
+        };
+    }
+
+    pub fn deinit(self: *DirectWrite) void {
+        self.collection.release();
+        self.factory.release();
+        self.* = undefined;
+    }
+
+    pub fn discover(
+        self: *const DirectWrite,
+        alloc: Allocator,
+        desc: Descriptor,
+    ) !DiscoverIterator {
+        return .{
+            .factory = self.factory,
+            .collection = self.collection,
+            .family_index = 0,
+            .font_index = 0,
+            .alloc = alloc,
+            .desc = desc,
+            .variations = desc.variations,
+        };
+    }
+
+    pub fn discoverFallback(
+        self: *const DirectWrite,
+        alloc: Allocator,
+        collection: *Collection,
+        desc: Descriptor,
+    ) !DiscoverIterator {
+        _ = collection;
+        return try self.discover(alloc, desc);
+    }
+
+    pub const DiscoverIterator = struct {
+        factory: *IDWriteFactory,
+        collection: *IDWriteFontCollection,
+        family_index: u32,
+        font_index: u32,
+        alloc: Allocator,
+        desc: Descriptor,
+        variations: []const Variation,
+
+        pub fn deinit(self: *DiscoverIterator) void {
+            _ = self;
+        }
+
+        pub fn next(self: *DiscoverIterator) !?DeferredFace {
+            const family_count = self.collection.getFontFamilyCount();
+            while (self.family_index < family_count) {
+                const family = try self.collection.getFontFamily(self.family_index);
+                defer family.release();
+
+                const family_name = try family.getFamilyName(self.alloc);
+                defer self.alloc.free(family_name);
+
+                if (self.desc.family) |target_family| {
+                    if (!std.ascii.eqlIgnoreCase(target_family, family_name)) {
+                        self.family_index += 1;
+                        self.font_index = 0;
+                        continue;
+                    }
+                }
+
+                const font_count = family.getFontCount();
+                while (self.font_index < font_count) {
+                    const font = try family.getFont(self.font_index);
+                    defer font.release();
+                    self.font_index += 1;
+
+                    if (!fontMatchesDescriptor(font, self.desc)) continue;
+                    if (self.desc.codepoint != 0 and !font.hasCharacter(self.desc.codepoint)) {
+                        continue;
+                    }
+
+                    const face = try font.createFontFace();
+                    defer face.release();
+
+                    const file_info = try getFontFileInfo(
+                        self.alloc,
+                        face,
+                        font,
+                        family_name,
+                        self.variations,
+                    );
+
+                    return file_info;
+                }
+
+                self.family_index += 1;
+                self.font_index = 0;
+            }
+
+            return null;
+        }
+    };
+
+    fn fontMatchesDescriptor(font: *IDWriteFont, desc: Descriptor) bool {
+        if (desc.bold) {
+            if (font.getWeight() < DWRITE_FONT_WEIGHT_SEMI_BOLD) return false;
+        }
+        if (desc.italic) {
+            if (font.getStyle() == DWRITE_FONT_STYLE_NORMAL) return false;
+        }
+        return true;
+    }
+
+    fn getFontFileInfo(
+        alloc: Allocator,
+        face: *IDWriteFontFace,
+        font: *IDWriteFont,
+        family_name: [:0]const u8,
+        variations: []const Variation,
+    ) !DeferredFace {
+        var file_count: u32 = 0;
+        try face.getFiles(&file_count, null);
+        if (file_count == 0) return error.DirectWriteNoFile;
+
+        var files = try alloc.alloc(*IDWriteFontFile, file_count);
+        defer alloc.free(files);
+        try face.getFiles(&file_count, files.ptr);
+        defer {
+            for (files[0..file_count]) |file| file.release();
+        }
+
+        const file = files[0];
+        const path = try getFontFilePath(alloc, file);
+        errdefer alloc.free(path);
+
+        const index = face.getIndex();
+        const style = try font.getFaceName(alloc);
+        errdefer alloc.free(style);
+
+        return DeferredFace{
+            .dw = .{
+                .alloc = alloc,
+                .path = path,
+                .face_index = @intCast(index),
+                .family = try alloc.dupeZ(u8, family_name),
+                .style = style,
+                .variations = variations,
+            },
+        };
+    }
+
+    fn getFontFilePath(alloc: Allocator, file: *IDWriteFontFile) ![:0]u8 {
+        var key: ?*const anyopaque = null;
+        var key_size: u32 = 0;
+        try file.getReferenceKey(&key, &key_size);
+        const key_bytes = @as([*]const u8, @ptrCast(key.?))[0..key_size];
+
+        const loader = try file.getLoader();
+        defer loader.release();
+
+        const local_loader = loader.queryLocalFontFileLoader() orelse
+            return error.DirectWriteNoFile;
+        defer local_loader.release();
+
+        const path_len = try local_loader.getFilePathLengthFromKey(
+            key_bytes,
+        );
+        var buf = try alloc.alloc(u16, path_len + 1);
+        defer alloc.free(buf);
+
+        try local_loader.getFilePathFromKey(key_bytes, buf);
+        buf[path_len] = 0;
+        return try std.unicode.utf16LeToUtf8AllocZ(alloc, buf[0..path_len]);
+    }
+
+    fn createFactory() !*IDWriteFactory {
+        var factory: ?*IDWriteFactory = null;
+        const hr = dwrite.DWriteCreateFactory(
+            dwrite.DWRITE_FACTORY_TYPE_SHARED,
+            &IID_IDWriteFactory,
+            @ptrCast(&factory),
+        );
+        if (!hrSucceeded(hr)) return error.DirectWriteFailed;
+        return factory.?;
+    }
+
+    fn hrSucceeded(hr: win.HRESULT) bool {
+        return hr >= 0;
+    }
+
+    const dwrite = struct {
+        pub const DWRITE_FACTORY_TYPE_SHARED: win.UINT = 0;
+
+        pub extern "dwrite" fn DWriteCreateFactory(
+            factory_type: win.UINT,
+            iid: *const win.GUID,
+            factory: *?*anyopaque,
+        ) callconv(.winapi) win.HRESULT;
+    };
+
+    const DWRITE_FONT_STYLE_NORMAL: win.UINT = 0;
+    const DWRITE_FONT_WEIGHT_SEMI_BOLD: win.UINT = 600;
+
+    const IID_IDWriteFactory = win.GUID{
+        .Data1 = 0xB859EE5A,
+        .Data2 = 0xD838,
+        .Data3 = 0x4B5B,
+        .Data4 = .{ 0xA2, 0xE8, 0x1A, 0xDC, 0x7D, 0x93, 0xDB, 0x48 },
+    };
+    const IID_IDWriteLocalFontFileLoader = win.GUID{
+        .Data1 = 0xB2D9F3EC,
+        .Data2 = 0xC9FE,
+        .Data3 = 0x4A11,
+        .Data4 = .{ 0xA2, 0xEC, 0xD8, 0x62, 0x08, 0xF7, 0xC0, 0xA2 },
+    };
+    const IID_IDWriteLocalizedStrings = win.GUID{
+        .Data1 = 0x08256209,
+        .Data2 = 0x099A,
+        .Data3 = 0x4B34,
+        .Data4 = .{ 0xB8, 0x6D, 0xC2, 0x2B, 0x11, 0x0E, 0x77, 0x71 },
+    };
+
+    const IUnknown = extern struct {
+        vtbl: *const VTable,
+        const VTable = extern struct {
+            QueryInterface: *const fn (*IUnknown, *const win.GUID, *?*anyopaque) callconv(.winapi) win.HRESULT,
+            AddRef: *const fn (*IUnknown) callconv(.winapi) u32,
+            Release: *const fn (*IUnknown) callconv(.winapi) u32,
+        };
+        fn release(self: *IUnknown) void {
+            _ = self.vtbl.Release(self);
+        }
+    };
+
+    const IDWriteFactory = extern struct {
+        vtbl: *const VTable,
+        const VTable = extern struct {
+            QueryInterface: *const fn (*IDWriteFactory, *const win.GUID, *?*anyopaque) callconv(.winapi) win.HRESULT,
+            AddRef: *const fn (*IDWriteFactory) callconv(.winapi) u32,
+            Release: *const fn (*IDWriteFactory) callconv(.winapi) u32,
+            GetSystemFontCollection: *const fn (*IDWriteFactory, *?*IDWriteFontCollection, win.BOOL) callconv(.winapi) win.HRESULT,
+        };
+
+        fn release(self: *IDWriteFactory) void {
+            _ = self.vtbl.Release(self);
+        }
+
+        fn getSystemFontCollection(self: *IDWriteFactory) !*IDWriteFontCollection {
+            var collection: ?*IDWriteFontCollection = null;
+            const hr = self.vtbl.GetSystemFontCollection(self, &collection, 0);
+            if (!hrSucceeded(hr)) return error.DirectWriteFailed;
+            return collection.?;
+        }
+    };
+
+    const IDWriteFontCollection = extern struct {
+        vtbl: *const VTable,
+        const VTable = extern struct {
+            QueryInterface: *const fn (*IDWriteFontCollection, *const win.GUID, *?*anyopaque) callconv(.winapi) win.HRESULT,
+            AddRef: *const fn (*IDWriteFontCollection) callconv(.winapi) u32,
+            Release: *const fn (*IDWriteFontCollection) callconv(.winapi) u32,
+            GetFontFamilyCount: *const fn (*IDWriteFontCollection) callconv(.winapi) u32,
+            GetFontFamily: *const fn (*IDWriteFontCollection, u32, *?*IDWriteFontFamily) callconv(.winapi) win.HRESULT,
+        };
+
+        fn release(self: *IDWriteFontCollection) void {
+            _ = self.vtbl.Release(self);
+        }
+
+        fn getFontFamilyCount(self: *IDWriteFontCollection) u32 {
+            return self.vtbl.GetFontFamilyCount(self);
+        }
+
+        fn getFontFamily(self: *IDWriteFontCollection, index: u32) !*IDWriteFontFamily {
+            var family: ?*IDWriteFontFamily = null;
+            const hr = self.vtbl.GetFontFamily(self, index, &family);
+            if (!hrSucceeded(hr)) return error.DirectWriteFailed;
+            return family.?;
+        }
+    };
+
+    const IDWriteFontFamily = extern struct {
+        vtbl: *const VTable,
+        const VTable = extern struct {
+            QueryInterface: *const fn (*IDWriteFontFamily, *const win.GUID, *?*anyopaque) callconv(.winapi) win.HRESULT,
+            AddRef: *const fn (*IDWriteFontFamily) callconv(.winapi) u32,
+            Release: *const fn (*IDWriteFontFamily) callconv(.winapi) u32,
+            GetFontCollection: *const fn (*IDWriteFontFamily, *?*IDWriteFontCollection) callconv(.winapi) win.HRESULT,
+            GetFontCount: *const fn (*IDWriteFontFamily) callconv(.winapi) u32,
+            GetFont: *const fn (*IDWriteFontFamily, u32, *?*IDWriteFont) callconv(.winapi) win.HRESULT,
+            GetFamilyNames: *const fn (*IDWriteFontFamily, *?*IDWriteLocalizedStrings) callconv(.winapi) win.HRESULT,
+        };
+
+        fn release(self: *IDWriteFontFamily) void {
+            _ = self.vtbl.Release(self);
+        }
+
+        fn getFontCount(self: *IDWriteFontFamily) u32 {
+            return self.vtbl.GetFontCount(self);
+        }
+
+        fn getFont(self: *IDWriteFontFamily, index: u32) !*IDWriteFont {
+            var font: ?*IDWriteFont = null;
+            const hr = self.vtbl.GetFont(self, index, &font);
+            if (!hrSucceeded(hr)) return error.DirectWriteFailed;
+            return font.?;
+        }
+
+        fn getFamilyName(self: *IDWriteFontFamily, alloc: Allocator) ![:0]u8 {
+            var strings: ?*IDWriteLocalizedStrings = null;
+            const hr = self.vtbl.GetFamilyNames(self, &strings);
+            if (!hrSucceeded(hr)) return error.DirectWriteFailed;
+            defer strings.?.release();
+            return try strings.?.getBestString(alloc);
+        }
+    };
+
+    const IDWriteFont = extern struct {
+        vtbl: *const VTable,
+        const VTable = extern struct {
+            QueryInterface: *const fn (*IDWriteFont, *const win.GUID, *?*anyopaque) callconv(.winapi) win.HRESULT,
+            AddRef: *const fn (*IDWriteFont) callconv(.winapi) u32,
+            Release: *const fn (*IDWriteFont) callconv(.winapi) u32,
+            GetFontFamily: *const fn (*IDWriteFont, *?*IDWriteFontFamily) callconv(.winapi) win.HRESULT,
+            GetWeight: *const fn (*IDWriteFont) callconv(.winapi) win.UINT,
+            GetStretch: *const fn (*IDWriteFont) callconv(.winapi) win.UINT,
+            GetStyle: *const fn (*IDWriteFont) callconv(.winapi) win.UINT,
+            IsSymbolFont: *const fn (*IDWriteFont) callconv(.winapi) win.BOOL,
+            GetFaceNames: *const fn (*IDWriteFont, *?*IDWriteLocalizedStrings) callconv(.winapi) win.HRESULT,
+            GetInformationalStrings: *const fn (*IDWriteFont, win.UINT, *?*IDWriteLocalizedStrings, *win.BOOL) callconv(.winapi) win.HRESULT,
+            GetSimulations: *const fn (*IDWriteFont) callconv(.winapi) win.UINT,
+            GetMetrics: *const fn (*IDWriteFont, *anyopaque) callconv(.winapi) void,
+            HasCharacter: *const fn (*IDWriteFont, u32, *win.BOOL) callconv(.winapi) win.HRESULT,
+            CreateFontFace: *const fn (*IDWriteFont, *?*IDWriteFontFace) callconv(.winapi) win.HRESULT,
+        };
+
+        fn release(self: *IDWriteFont) void {
+            _ = self.vtbl.Release(self);
+        }
+
+        fn getWeight(self: *IDWriteFont) win.UINT {
+            return self.vtbl.GetWeight(self);
+        }
+
+        fn getStyle(self: *IDWriteFont) win.UINT {
+            return self.vtbl.GetStyle(self);
+        }
+
+        fn hasCharacter(self: *IDWriteFont, codepoint: u32) bool {
+            var exists: win.BOOL = 0;
+            const hr = self.vtbl.HasCharacter(self, codepoint, &exists);
+            return hrSucceeded(hr) and exists != 0;
+        }
+
+        fn createFontFace(self: *IDWriteFont) !*IDWriteFontFace {
+            var face: ?*IDWriteFontFace = null;
+            const hr = self.vtbl.CreateFontFace(self, &face);
+            if (!hrSucceeded(hr)) return error.DirectWriteFailed;
+            return face.?;
+        }
+
+        fn getFaceName(self: *IDWriteFont, alloc: Allocator) ![:0]u8 {
+            var strings: ?*IDWriteLocalizedStrings = null;
+            const hr = self.vtbl.GetFaceNames(self, &strings);
+            if (!hrSucceeded(hr)) return error.DirectWriteFailed;
+            defer strings.?.release();
+            return try strings.?.getBestString(alloc);
+        }
+    };
+
+    const IDWriteFontFace = extern struct {
+        vtbl: *const VTable,
+        const VTable = extern struct {
+            QueryInterface: *const fn (*IDWriteFontFace, *const win.GUID, *?*anyopaque) callconv(.winapi) win.HRESULT,
+            AddRef: *const fn (*IDWriteFontFace) callconv(.winapi) u32,
+            Release: *const fn (*IDWriteFontFace) callconv(.winapi) u32,
+            GetType: *const fn (*IDWriteFontFace) callconv(.winapi) win.UINT,
+            GetFiles: *const fn (*IDWriteFontFace, *u32, ?[*]*IDWriteFontFile) callconv(.winapi) win.HRESULT,
+            GetIndex: *const fn (*IDWriteFontFace) callconv(.winapi) u32,
+        };
+
+        fn release(self: *IDWriteFontFace) void {
+            _ = self.vtbl.Release(self);
+        }
+
+        fn getFiles(self: *IDWriteFontFace, count: *u32, files: ?[*]*IDWriteFontFile) !void {
+            const hr = self.vtbl.GetFiles(self, count, files);
+            if (!hrSucceeded(hr)) return error.DirectWriteFailed;
+        }
+
+        fn getIndex(self: *IDWriteFontFace) u32 {
+            return self.vtbl.GetIndex(self);
+        }
+    };
+
+    const IDWriteFontFile = extern struct {
+        vtbl: *const VTable,
+        const VTable = extern struct {
+            QueryInterface: *const fn (*IDWriteFontFile, *const win.GUID, *?*anyopaque) callconv(.winapi) win.HRESULT,
+            AddRef: *const fn (*IDWriteFontFile) callconv(.winapi) u32,
+            Release: *const fn (*IDWriteFontFile) callconv(.winapi) u32,
+            GetReferenceKey: *const fn (*IDWriteFontFile, *?*const anyopaque, *u32) callconv(.winapi) win.HRESULT,
+            GetLoader: *const fn (*IDWriteFontFile, *?*IDWriteFontFileLoader) callconv(.winapi) win.HRESULT,
+        };
+
+        fn release(self: *IDWriteFontFile) void {
+            _ = self.vtbl.Release(self);
+        }
+
+        fn getReferenceKey(self: *IDWriteFontFile, key: *?*const anyopaque, size: *u32) !void {
+            const hr = self.vtbl.GetReferenceKey(self, key, size);
+            if (!hrSucceeded(hr)) return error.DirectWriteFailed;
+        }
+
+        fn getLoader(self: *IDWriteFontFile) !*IDWriteFontFileLoader {
+            var loader: ?*IDWriteFontFileLoader = null;
+            const hr = self.vtbl.GetLoader(self, &loader);
+            if (!hrSucceeded(hr)) return error.DirectWriteFailed;
+            return loader.?;
+        }
+    };
+
+    const IDWriteFontFileLoader = extern struct {
+        vtbl: *const VTable,
+        const VTable = extern struct {
+            QueryInterface: *const fn (*IDWriteFontFileLoader, *const win.GUID, *?*anyopaque) callconv(.winapi) win.HRESULT,
+            AddRef: *const fn (*IDWriteFontFileLoader) callconv(.winapi) u32,
+            Release: *const fn (*IDWriteFontFileLoader) callconv(.winapi) u32,
+            CreateStreamFromKey: *const fn (*IDWriteFontFileLoader, *const anyopaque, u32, *?*anyopaque) callconv(.winapi) win.HRESULT,
+        };
+
+        fn release(self: *IDWriteFontFileLoader) void {
+            _ = self.vtbl.Release(self);
+        }
+
+        fn queryLocalFontFileLoader(self: *IDWriteFontFileLoader) ?*IDWriteLocalFontFileLoader {
+            var local: ?*IDWriteLocalFontFileLoader = null;
+            const hr = self.vtbl.QueryInterface(
+                self,
+                &IID_IDWriteLocalFontFileLoader,
+                @ptrCast(&local),
+            );
+            if (!hrSucceeded(hr)) return null;
+            return local.?;
+        }
+    };
+
+    const IDWriteLocalFontFileLoader = extern struct {
+        vtbl: *const VTable,
+        const VTable = extern struct {
+            QueryInterface: *const fn (*IDWriteLocalFontFileLoader, *const win.GUID, *?*anyopaque) callconv(.winapi) win.HRESULT,
+            AddRef: *const fn (*IDWriteLocalFontFileLoader) callconv(.winapi) u32,
+            Release: *const fn (*IDWriteLocalFontFileLoader) callconv(.winapi) u32,
+            GetFilePathLengthFromKey: *const fn (*IDWriteLocalFontFileLoader, *const anyopaque, u32, *u32) callconv(.winapi) win.HRESULT,
+            GetFilePathFromKey: *const fn (*IDWriteLocalFontFileLoader, *const anyopaque, u32, [*]u16, u32) callconv(.winapi) win.HRESULT,
+        };
+
+        fn release(self: *IDWriteLocalFontFileLoader) void {
+            _ = self.vtbl.Release(self);
+        }
+
+        fn getFilePathLengthFromKey(self: *IDWriteLocalFontFileLoader, key: []const u8) !u32 {
+            var len: u32 = 0;
+            const hr = self.vtbl.GetFilePathLengthFromKey(
+                self,
+                key.ptr,
+                @intCast(key.len),
+                &len,
+            );
+            if (!hrSucceeded(hr)) return error.DirectWriteFailed;
+            return len;
+        }
+
+        fn getFilePathFromKey(self: *IDWriteLocalFontFileLoader, key: []const u8, buffer: []u16) !void {
+            const hr = self.vtbl.GetFilePathFromKey(
+                self,
+                key.ptr,
+                @intCast(key.len),
+                buffer.ptr,
+                @intCast(buffer.len),
+            );
+            if (!hrSucceeded(hr)) return error.DirectWriteFailed;
+        }
+    };
+
+    const IDWriteLocalizedStrings = extern struct {
+        vtbl: *const VTable,
+        const VTable = extern struct {
+            QueryInterface: *const fn (*IDWriteLocalizedStrings, *const win.GUID, *?*anyopaque) callconv(.winapi) win.HRESULT,
+            AddRef: *const fn (*IDWriteLocalizedStrings) callconv(.winapi) u32,
+            Release: *const fn (*IDWriteLocalizedStrings) callconv(.winapi) u32,
+            GetCount: *const fn (*IDWriteLocalizedStrings) callconv(.winapi) u32,
+            FindLocaleName: *const fn (*IDWriteLocalizedStrings, [*:0]const u16, *u32, *win.BOOL) callconv(.winapi) win.HRESULT,
+            GetLocaleNameLength: *const fn (*IDWriteLocalizedStrings, u32, *u32) callconv(.winapi) win.HRESULT,
+            GetLocaleName: *const fn (*IDWriteLocalizedStrings, u32, [*]u16, u32) callconv(.winapi) win.HRESULT,
+            GetStringLength: *const fn (*IDWriteLocalizedStrings, u32, *u32) callconv(.winapi) win.HRESULT,
+            GetString: *const fn (*IDWriteLocalizedStrings, u32, [*]u16, u32) callconv(.winapi) win.HRESULT,
+        };
+
+        fn release(self: *IDWriteLocalizedStrings) void {
+            _ = self.vtbl.Release(self);
+        }
+
+        fn getBestString(self: *IDWriteLocalizedStrings, alloc: Allocator) ![:0]u8 {
+            const locale = std.unicode.utf8ToUtf16LeStringLiteral("en-us");
+            var index: u32 = 0;
+            var exists: win.BOOL = 0;
+            const hr = self.vtbl.FindLocaleName(self, locale, &index, &exists);
+            if (!hrSucceeded(hr)) return error.DirectWriteFailed;
+            if (exists == 0) index = 0;
+
+            var len: u32 = 0;
+            if (!hrSucceeded(self.vtbl.GetStringLength(self, index, &len))) {
+                return error.DirectWriteFailed;
+            }
+
+            var buf = try alloc.alloc(u16, len + 1);
+            defer alloc.free(buf);
+            if (!hrSucceeded(self.vtbl.GetString(self, index, buf.ptr, len + 1))) {
+                return error.DirectWriteFailed;
+            }
+
+            return try std.unicode.utf16LeToUtf8AllocZ(alloc, buf[0..len]);
         }
     };
 };

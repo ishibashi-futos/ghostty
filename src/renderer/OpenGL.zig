@@ -174,6 +174,11 @@ pub fn surfaceInit(surface: *apprt.Surface) !void {
             // to compile for OpenGL targets but libghostty is strictly
             // broken for rendering on this platforms.
         },
+
+        apprt.win32 => {
+            // Win32 rendering is wired up separately (ANGLE/Vulkan preferred).
+            // Leave as a no-op to allow builds until a backend is selected.
+        },
     }
 
     // These are very noisy so this is commented, but easy to uncomment
@@ -213,6 +218,10 @@ pub fn threadEnter(self: *const OpenGL, surface: *apprt.Surface) !void {
             // to compile for OpenGL targets but libghostty is strictly
             // broken for rendering on this platforms.
         },
+
+        apprt.win32 => {
+            // No-op until a Win32 GL backend is selected.
+        },
     }
 }
 
@@ -230,6 +239,10 @@ pub fn threadExit(self: *const OpenGL) void {
 
         apprt.embedded => {
             // TODO: see threadEnter
+        },
+
+        apprt.win32 => {
+            // No-op until a Win32 GL backend is selected.
         },
     }
 }

@@ -17,14 +17,20 @@ const window_title = std.unicode.utf8ToUtf16LeStringLiteral("Ghostty (Win32)");
 const WM_DESTROY: win.UINT = 0x0002;
 const WM_CLOSE: win.UINT = 0x0010;
 const WM_APP: win.UINT = 0x8000;
+const WM_DPICHANGED: win.UINT = 0x02E0;
 const CS_HREDRAW: win.UINT = 0x0002;
 const CS_VREDRAW: win.UINT = 0x0001;
 const WS_OVERLAPPEDWINDOW: win.DWORD = 0x00CF0000;
 const WS_VISIBLE: win.DWORD = 0x10000000;
 const CW_USEDEFAULT: win.INT = @bitCast(@as(u32, 0x80000000));
 const SW_SHOWDEFAULT: win.INT = 10;
+const SWP_NOZORDER: win.UINT = 0x0004;
+const SWP_NOACTIVATE: win.UINT = 0x0010;
 const ERROR_CLASS_ALREADY_EXISTS: win.Win32Error = .CLASS_ALREADY_EXISTS;
 const IDC_ARROW: win.LPCWSTR = @ptrFromInt(@as(usize, 32512));
+const DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2: win.HANDLE = @ptrFromInt(
+    @as(usize, @bitCast(@as(isize, -4))),
+);
 
 const POINT = extern struct {
     x: win.LONG,
@@ -38,6 +44,13 @@ const MSG = extern struct {
     lParam: win.LPARAM,
     time: win.DWORD,
     pt: POINT,
+};
+
+const RECT = extern struct {
+    left: win.LONG,
+    top: win.LONG,
+    right: win.LONG,
+    bottom: win.LONG,
 };
 
 const WNDPROC = *const fn (
@@ -127,6 +140,18 @@ const user32 = struct {
     pub extern "user32" fn DestroyWindow(
         hWnd: win.HWND,
     ) callconv(.winapi) win.BOOL;
+    pub extern "user32" fn SetProcessDpiAwarenessContext(
+        value: win.HANDLE,
+    ) callconv(.winapi) win.BOOL;
+    pub extern "user32" fn SetWindowPos(
+        hWnd: win.HWND,
+        hWndInsertAfter: ?win.HWND,
+        X: win.INT,
+        Y: win.INT,
+        cx: win.INT,
+        cy: win.INT,
+        uFlags: win.UINT,
+    ) callconv(.winapi) win.BOOL;
 };
 
 core_app: *CoreApp,
@@ -149,6 +174,9 @@ pub fn init(
         return windows.unexpectedError(win.kernel32.GetLastError());
 
     const hinstance: win.HINSTANCE = @ptrCast(hmodule);
+    _ = user32.SetProcessDpiAwarenessContext(
+        DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+    );
     try registerWindowClass(hinstance);
     const hwnd = try createWindow(hinstance);
 
@@ -161,7 +189,6 @@ pub fn init(
 }
 
 pub fn run(self: *App) !void {
-    _ = self;
     var msg: MSG = undefined;
     while (true) {
         const result = user32.GetMessageW(&msg, null, 0, 0);
@@ -171,12 +198,16 @@ pub fn run(self: *App) !void {
         if (result == 0) break;
         _ = user32.TranslateMessage(&msg);
         _ = user32.DispatchMessageW(&msg);
+        if (msg.message == WM_APP) {
+            try self.core_app.tick(self);
+        }
     }
 }
 
 pub fn terminate(self: *App) void {
     if (self.hwnd) |hwnd| {
         _ = user32.DestroyWindow(hwnd);
+        self.hwnd = null;
     }
     self.config.deinit();
 }
@@ -284,6 +315,25 @@ fn windowProc(
     lparam: win.LPARAM,
 ) callconv(.winapi) win.LRESULT {
     switch (msg) {
+        WM_CLOSE => {
+            _ = user32.DestroyWindow(hwnd);
+            return 0;
+        },
+        WM_DPICHANGED => {
+            const rect_ptr: *const RECT = @ptrFromInt(
+                @as(usize, @bitCast(lparam)),
+            );
+            _ = user32.SetWindowPos(
+                hwnd,
+                null,
+                rect_ptr.left,
+                rect_ptr.top,
+                rect_ptr.right - rect_ptr.left,
+                rect_ptr.bottom - rect_ptr.top,
+                SWP_NOZORDER | SWP_NOACTIVATE,
+            );
+            return 0;
+        },
         WM_DESTROY => {
             user32.PostQuitMessage(0);
             return 0;

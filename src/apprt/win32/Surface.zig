@@ -1,9 +1,16 @@
 const Surface = @This();
 
 const std = @import("std");
+const win = std.os.windows;
 const apprt = @import("../../apprt.zig");
 const CoreSurface = @import("../../Surface.zig");
 const App = @import("App.zig");
+
+const user32 = struct {
+    pub extern "user32" fn GetDpiForWindow(
+        hWnd: win.HWND,
+    ) callconv(.winapi) win.UINT;
+};
 
 rt_app: *App,
 core_surface: ?*CoreSurface = null,
@@ -36,8 +43,11 @@ pub fn getTitle(self: *Surface) ?[:0]const u8 {
 }
 
 pub fn getContentScale(self: *const Surface) !apprt.ContentScale {
-    _ = self;
-    return .{ .x = 1, .y = 1 };
+    const hwnd = self.rt_app.hwnd orelse return .{ .x = 1, .y = 1 };
+    const dpi = user32.GetDpiForWindow(hwnd);
+    if (dpi == 0) return .{ .x = 1, .y = 1 };
+    const scale = @as(f32, @floatFromInt(dpi)) / 96.0;
+    return .{ .x = scale, .y = scale };
 }
 
 pub fn getSize(self: *const Surface) !apprt.SurfaceSize {

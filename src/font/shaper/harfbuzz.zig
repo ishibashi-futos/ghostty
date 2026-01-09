@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const assert = @import("../../quirks.zig").inlineAssert;
 const Allocator = std.mem.Allocator;
 const harfbuzz = @import("harfbuzz");
@@ -374,6 +375,36 @@ test "shape" {
         _ = try shaper.shape(run);
     }
     try testing.expectEqual(@as(usize, 1), count);
+}
+
+test "shape windows sample" {
+    if (comptime builtin.os.tag != .windows) return;
+
+    const testing = std.testing;
+    const alloc = testing.allocator;
+
+    var testdata = try testShaper(alloc);
+    defer testdata.deinit();
+
+    var t = try terminal.Terminal.init(alloc, .{ .cols = 10, .rows = 3 });
+    defer t.deinit(alloc);
+
+    var s = t.vtStream();
+    defer s.deinit();
+    try s.nextSlice("ffi");
+
+    var state: terminal.RenderState = .empty;
+    defer state.deinit(alloc);
+    try state.update(alloc, &t);
+
+    var shaper = &testdata.shaper;
+    var it = shaper.runIterator(.{
+        .grid = testdata.grid,
+        .cells = state.row_data.get(0).cells.slice(),
+    });
+    const run = (try it.next(alloc)).?;
+    const cells = try shaper.shape(run);
+    try testing.expect(cells.len > 0);
 }
 
 test "shape inconsolata ligs" {

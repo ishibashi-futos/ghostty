@@ -23,8 +23,9 @@ pub const Options = struct {
 pub fn config(alloc: Allocator, opts: Options) ![]u8 {
     return try dir(alloc, opts, .{
         .env = "XDG_CONFIG_HOME",
-        .windows_env = "LOCALAPPDATA",
+        .windows_env = "APPDATA",
         .default_subdir = ".config",
+        .windows_home_subdir = "AppData\\Roaming",
     });
 }
 
@@ -34,6 +35,7 @@ pub fn cache(alloc: Allocator, opts: Options) ![]u8 {
         .env = "XDG_CACHE_HOME",
         .windows_env = "LOCALAPPDATA",
         .default_subdir = ".cache",
+        .windows_home_subdir = "AppData\\Local",
     });
 }
 
@@ -43,6 +45,7 @@ pub fn state(alloc: Allocator, opts: Options) ![]u8 {
         .env = "XDG_STATE_HOME",
         .windows_env = "LOCALAPPDATA",
         .default_subdir = ".local/state",
+        .windows_home_subdir = "AppData\\Local",
     });
 }
 
@@ -50,6 +53,7 @@ const InternalOptions = struct {
     env: []const u8,
     windows_env: []const u8,
     default_subdir: []const u8,
+    windows_home_subdir: ?[]const u8 = null,
 };
 
 /// Unified helper to get XDG directories that follow a common pattern.
@@ -60,9 +64,13 @@ fn dir(
 ) ![]u8 {
     // If we have a cached home dir, use that.
     if (opts.home) |home| {
+        const home_subdir = if (builtin.os.tag == .windows)
+            internal_opts.windows_home_subdir orelse internal_opts.default_subdir
+        else
+            internal_opts.default_subdir;
         return try std.fs.path.join(alloc, &[_][]const u8{
             home,
-            internal_opts.default_subdir,
+            home_subdir,
             opts.subdir orelse "",
         });
     }
@@ -91,9 +99,13 @@ fn dir(
     // Get our home dir
     var buf: [1024]u8 = undefined;
     if (try homedir.home(&buf)) |home| {
+        const home_subdir = if (builtin.os.tag == .windows)
+            internal_opts.windows_home_subdir orelse internal_opts.default_subdir
+        else
+            internal_opts.default_subdir;
         return try std.fs.path.join(alloc, &[_][]const u8{
             home,
-            internal_opts.default_subdir,
+            home_subdir,
             opts.subdir orelse "",
         });
     }

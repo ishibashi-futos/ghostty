@@ -42,6 +42,9 @@ pub fn run(alloc: Allocator) !u8 {
     try stdout.print("  - font engine   : {}\n", .{build_config.font_backend});
     try stdout.print("  - renderer      : {}\n", .{renderer.Renderer});
     try stdout.print("  - libxev        : {t}\n", .{xev.backend});
+    if (internal_os.isWsl()) {
+        try stdout.print("  - wsl           : true\n", .{});
+    }
     if (comptime build_config.app_runtime == .gtk) {
         if (comptime builtin.os.tag == .linux) {
             const kernel_info = internal_os.getKernelInfo(alloc);

@@ -14,6 +14,7 @@ pub const FILE_ATTRIBUTE_NORMAL = windows.FILE_ATTRIBUTE_NORMAL;
 pub const FILE_FLAG_OVERLAPPED = windows.FILE_FLAG_OVERLAPPED;
 pub const FILE_SHARE_READ = windows.FILE_SHARE_READ;
 pub const GENERIC_READ = windows.GENERIC_READ;
+pub const GENERIC_WRITE = windows.GENERIC_WRITE;
 pub const HANDLE = windows.HANDLE;
 pub const HANDLE_FLAG_INHERIT = windows.HANDLE_FLAG_INHERIT;
 pub const INFINITE = windows.INFINITE;
@@ -30,6 +31,7 @@ pub const SYNCHRONIZE = windows.SYNCHRONIZE;
 pub const WAIT_FAILED = windows.WAIT_FAILED;
 pub const FALSE = windows.FALSE;
 pub const TRUE = windows.TRUE;
+pub const SW_SHOWNORMAL: c_int = 1;
 
 pub const exp = struct {
     pub const HPCON = windows.LPVOID;
@@ -53,6 +55,36 @@ pub const exp = struct {
             hWritePipe: *windows.HANDLE,
             lpPipeAttributes: ?*const windows.SECURITY_ATTRIBUTES,
             nSize: windows.DWORD,
+        ) callconv(windows.WINAPI) windows.BOOL;
+        pub extern "kernel32" fn CreateNamedPipeW(
+            lpName: windows.LPCWSTR,
+            dwOpenMode: windows.DWORD,
+            dwPipeMode: windows.DWORD,
+            nMaxInstances: windows.DWORD,
+            nOutBufferSize: windows.DWORD,
+            nInBufferSize: windows.DWORD,
+            nDefaultTimeOut: windows.DWORD,
+            lpSecurityAttributes: ?*windows.SECURITY_ATTRIBUTES,
+        ) callconv(windows.WINAPI) windows.HANDLE;
+        pub extern "kernel32" fn ConnectNamedPipe(
+            hNamedPipe: windows.HANDLE,
+            lpOverlapped: ?*anyopaque,
+        ) callconv(windows.WINAPI) windows.BOOL;
+        pub extern "kernel32" fn DisconnectNamedPipe(
+            hNamedPipe: windows.HANDLE,
+        ) callconv(windows.WINAPI) windows.BOOL;
+        pub extern "kernel32" fn CreateFileW(
+            lpFileName: windows.LPCWSTR,
+            dwDesiredAccess: windows.DWORD,
+            dwShareMode: windows.DWORD,
+            lpSecurityAttributes: ?*windows.SECURITY_ATTRIBUTES,
+            dwCreationDisposition: windows.DWORD,
+            dwFlagsAndAttributes: windows.DWORD,
+            hTemplateFile: ?windows.HANDLE,
+        ) callconv(windows.WINAPI) windows.HANDLE;
+        pub extern "kernel32" fn WaitNamedPipeW(
+            lpNamedPipeName: windows.LPCWSTR,
+            nTimeOut: windows.DWORD,
         ) callconv(windows.WINAPI) windows.BOOL;
         pub extern "kernel32" fn CreatePseudoConsole(
             size: windows.COORD,
@@ -100,6 +132,27 @@ pub const exp = struct {
             lpProcessInformation: *windows.PROCESS_INFORMATION,
         ) callconv(windows.WINAPI) windows.BOOL;
     };
+
+    pub const shell32 = struct {
+        pub extern "shell32" fn ShellExecuteW(
+            hwnd: ?windows.HWND,
+            lpOperation: ?windows.LPCWSTR,
+            lpFile: ?windows.LPCWSTR,
+            lpParameters: ?windows.LPCWSTR,
+            lpDirectory: ?windows.LPCWSTR,
+            nShowCmd: windows.INT,
+        ) callconv(windows.WINAPI) windows.HINSTANCE;
+    };
+
+    pub const PIPE_ACCESS_DUPLEX = 0x00000003;
+    pub const PIPE_ACCESS_INBOUND = 0x00000001;
+    pub const PIPE_READMODE_BYTE = 0x00000000;
+    pub const PIPE_TYPE_BYTE = 0x00000000;
+    pub const PIPE_WAIT = 0x00000000;
+
+    pub const ERROR_FILE_NOT_FOUND: windows.DWORD = 2;
+    pub const ERROR_PIPE_BUSY: windows.DWORD = 231;
+    pub const ERROR_PIPE_CONNECTED: windows.DWORD = 535;
 
     pub const PROC_THREAD_ATTRIBUTE_NUMBER = 0x0000FFFF;
     pub const PROC_THREAD_ATTRIBUTE_THREAD = 0x00010000;

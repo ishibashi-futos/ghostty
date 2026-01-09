@@ -4944,6 +4944,8 @@ fn equalField(comptime T: type, old: T, new: T) bool {
 /// We should keep the set of behaviors that depend on this as small
 /// as possible because magic sucks, but each place is well documented.
 fn probableCliEnvironment() bool {
+    if (builtin.os.tag != .windows and internal_os.isWsl()) return true;
+
     switch (builtin.os.tag) {
         // Windows has its own problems, just ignore it for now since
         // its not a real supported target and GTK via WSL2 assuming

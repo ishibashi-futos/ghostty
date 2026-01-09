@@ -2,6 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const apprt = @import("../apprt.zig");
+const windows = @import("windows.zig");
 
 const log = std.log.scoped(.@"os-open");
 
@@ -20,14 +21,13 @@ pub fn open(
     kind: apprt.action.OpenUrl.Kind,
     url: []const u8,
 ) !void {
+    if (builtin.os.tag == .windows) {
+        return try openWindows(alloc, url);
+    }
+
     var exe: std.process.Child = switch (builtin.os.tag) {
         .linux, .freebsd => .init(
             &.{ "xdg-open", url },
-            alloc,
-        ),
-
-        .windows => .init(
-            &.{ "rundll32", "url.dll,FileProtocolHandler", url },
             alloc,
         ),
 
@@ -58,6 +58,22 @@ pub fn open(
     // spawn a thread to handle this so that we never block.
     const thread = try std.Thread.spawn(.{}, openThread, .{ alloc, exe });
     thread.detach();
+}
+
+fn openWindows(alloc: Allocator, url: []const u8) !void {
+    const wide_url = try std.unicode.utf8ToUtf16LeAllocZ(alloc, url);
+    defer alloc.free(wide_url);
+
+    const operation = std.unicode.utf8ToUtf16LeStringLiteral("open");
+    const result = windows.exp.shell32.ShellExecuteW(
+        null,
+        operation,
+        wide_url.ptr,
+        null,
+        null,
+        windows.SW_SHOWNORMAL,
+    );
+    if (@intFromPtr(result) <= 32) return error.OpenFailed;
 }
 
 fn openThread(alloc: Allocator, exe_: std.process.Child) !void {

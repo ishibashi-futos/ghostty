@@ -110,6 +110,31 @@ pub fn getenvNotEmpty(alloc: Allocator, key: []const u8) !?GetEnvResult {
     return result_;
 }
 
+/// Return the system temp directory if available. The result must be deinit'd.
+pub fn tempDir(alloc: Allocator) Error!?GetEnvResult {
+    const keys = if (builtin.os.tag == .windows)
+        [_][]const u8{ "TEMP", "TMP", "TMPDIR" }
+    else
+        [_][]const u8{ "TMPDIR", "TMP", "TEMP" };
+
+    inline for (keys) |key| {
+        if (try getenvNotEmpty(alloc, key)) |value| return value;
+    }
+
+    if (builtin.os.tag == .windows) {
+        if (try getenvNotEmpty(alloc, "LOCALAPPDATA")) |value| {
+            defer value.deinit(alloc);
+            const path = try std.fs.path.join(alloc, &[_][]const u8{
+                value.value,
+                "Temp",
+            });
+            return .{ .value = path };
+        }
+    }
+
+    return null;
+}
+
 pub fn setenv(key: [:0]const u8, value: [:0]const u8) c_int {
     return switch (builtin.os.tag) {
         .windows => c._putenv_s(key.ptr, value.ptr),

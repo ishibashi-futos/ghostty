@@ -91,6 +91,20 @@ fn signalReadThreadPipe(fd: posix.fd_t) void {
     }
 }
 
+fn defaultShellCommand(alloc: Allocator) configpkg.Command {
+    if (comptime builtin.os.tag != .windows) return .{ .shell = "sh" };
+
+    const candidates = [_][]const u8{ "pwsh", "powershell", "cmd" };
+    for (candidates) |candidate| {
+        if (internal_os.path.expand(alloc, candidate)) |resolved| {
+            alloc.free(resolved);
+            return .{ .shell = candidate };
+        } else |_| {}
+    }
+
+    return .{ .shell = "cmd.exe" };
+}
+
 /// Call to initialize the terminal state as necessary for this backend.
 /// This is called before any termio begins. This should not be called
 /// after termio begins because it may put the internal terminal state
@@ -768,10 +782,7 @@ const Subprocess = struct {
         // Setup our shell integration, if we can.
         const shell_command: configpkg.Command = shell: {
             const default_shell_command: configpkg.Command =
-                cfg.command orelse .{ .shell = switch (builtin.os.tag) {
-                    .windows => "cmd.exe",
-                    else => "sh",
-                } };
+                cfg.command orelse defaultShellCommand(alloc);
 
             // Always set up shell features (GHOSTTY_SHELL_FEATURES). These are
             // used by both automatic and manual shell integrations.

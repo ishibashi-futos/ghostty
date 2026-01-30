@@ -23,9 +23,10 @@ pub const Options = struct {
 pub fn config(alloc: Allocator, opts: Options) ![]u8 {
     return try dir(alloc, opts, .{
         .env = "XDG_CONFIG_HOME",
-        .windows_env = "APPDATA",
+        .windows_env = "LOCALAPPDATA",
+        .windows_env_fallback = "APPDATA",
         .default_subdir = ".config",
-        .windows_home_subdir = "AppData\\Roaming",
+        .windows_home_subdir = "AppData\\Local",
     });
 }
 
@@ -52,6 +53,7 @@ pub fn state(alloc: Allocator, opts: Options) ![]u8 {
 const InternalOptions = struct {
     env: []const u8,
     windows_env: []const u8,
+    windows_env_fallback: ?[]const u8 = null,
     default_subdir: []const u8,
     windows_home_subdir: ?[]const u8 = null,
 };
@@ -77,10 +79,14 @@ fn dir(
 
     // First check the env var. On Windows we have to allocate so this tracks
     // both whether we have the env var and whether we own it.
-    // on Windows we treat `LOCALAPPDATA` as a fallback for `XDG_CONFIG_HOME`
+    // On Windows we treat XDG env as primary, then our Windows env fallback(s).
     const env_ = try env_os.getenvNotEmpty(alloc, internal_opts.env) orelse switch (builtin.os.tag) {
         else => null,
-        .windows => try env_os.getenvNotEmpty(alloc, internal_opts.windows_env),
+        .windows => (try env_os.getenvNotEmpty(alloc, internal_opts.windows_env)) orelse
+            if (internal_opts.windows_env_fallback) |fallback|
+            try env_os.getenvNotEmpty(alloc, fallback)
+            else
+                null,
     };
     defer if (env_) |env| env.deinit(alloc);
 
@@ -291,6 +297,72 @@ test "fallback when xdg env empty and subdir" {
         defer alloc.free(actual);
 
         try std.testing.expectEqualStrings(expected, actual);
+    }
+}
+
+test "windows config uses localappdata then appdata" {
+    if (builtin.os.tag != .windows) return error.SkipZigTest;
+
+    const alloc = std.testing.allocator;
+
+    const saved_xdg = blk: {
+        const value = try env_os.getenv(alloc, "XDG_CONFIG_HOME") orelse break :blk null;
+        defer value.deinit(alloc);
+        break :blk try alloc.dupeZ(u8, value.value);
+    };
+    const saved_local = blk: {
+        const value = try env_os.getenv(alloc, "LOCALAPPDATA") orelse break :blk null;
+        defer value.deinit(alloc);
+        break :blk try alloc.dupeZ(u8, value.value);
+    };
+    const saved_app = blk: {
+        const value = try env_os.getenv(alloc, "APPDATA") orelse break :blk null;
+        defer value.deinit(alloc);
+        break :blk try alloc.dupeZ(u8, value.value);
+    };
+    defer {
+        if (saved_xdg) |value| {
+            _ = env_os.setenv("XDG_CONFIG_HOME", value);
+            alloc.free(value);
+        } else {
+            _ = env_os.unsetenv("XDG_CONFIG_HOME");
+        }
+        if (saved_local) |value| {
+            _ = env_os.setenv("LOCALAPPDATA", value);
+            alloc.free(value);
+        } else {
+            _ = env_os.unsetenv("LOCALAPPDATA");
+        }
+        if (saved_app) |value| {
+            _ = env_os.setenv("APPDATA", value);
+            alloc.free(value);
+        } else {
+            _ = env_os.unsetenv("APPDATA");
+        }
+    }
+
+    _ = env_os.setenv("XDG_CONFIG_HOME", "");
+    _ = env_os.setenv("LOCALAPPDATA", "C:\\Users\\test\\AppData\\Local");
+    _ = env_os.setenv("APPDATA", "C:\\Users\\test\\AppData\\Roaming");
+
+    {
+        const path = try config(alloc, .{});
+        defer alloc.free(path);
+        try std.testing.expectEqualStrings(
+            "C:\\Users\\test\\AppData\\Local",
+            path,
+        );
+    }
+
+    _ = env_os.setenv("LOCALAPPDATA", "");
+
+    {
+        const path = try config(alloc, .{});
+        defer alloc.free(path);
+        try std.testing.expectEqualStrings(
+            "C:\\Users\\test\\AppData\\Roaming",
+            path,
+        );
     }
 }
 

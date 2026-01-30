@@ -76,18 +76,19 @@ fn runInner(alloc: Allocator, stderr: *std.Io.Writer) !u8 {
     const path = try configpkg.preferredDefaultFilePath(alloc);
     defer alloc.free(path);
 
-    // We don't currently support Windows because we use the exec syscall.
     if (comptime builtin.os.tag == .windows) {
-        try stderr.print(
-            \\The `ghostty +edit-config` command is not supported on Windows.
-            \\Please edit the configuration file manually at the following path:
-            \\
-            \\{s}
-            \\
-        ,
-            .{path},
-        );
-        return 1;
+        openConfigPathWindows(alloc, path) catch |err| {
+            try stderr.print(
+                \\Failed to open the configuration file on Windows.
+                \\Error: {}
+                \\Path: {s}
+                \\
+            ,
+                .{ err, path },
+            );
+            return 1;
+        };
+        return 0;
     }
 
     // Get our editor
@@ -165,4 +166,20 @@ fn runInner(alloc: Allocator, stderr: *std.Io.Writer) !u8 {
         \\
     , .{ err, editor, path });
     return 1;
+}
+
+fn openConfigPathWindows(alloc: Allocator, path: []const u8) !void {
+    const wide_path = try std.unicode.utf8ToUtf16LeAllocZ(alloc, path);
+    defer alloc.free(wide_path);
+
+    const operation = std.unicode.utf8ToUtf16LeStringLiteral("open");
+    const result = internal_os.windows.exp.shell32.ShellExecuteW(
+        null,
+        operation,
+        wide_path.ptr,
+        null,
+        null,
+        internal_os.windows.SW_SHOWNORMAL,
+    );
+    if (@intFromPtr(result) <= 32) return error.OpenFailed;
 }

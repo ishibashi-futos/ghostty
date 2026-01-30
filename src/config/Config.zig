@@ -2331,8 +2331,11 @@ keybind: Keybinds = .{},
 ///      the clipboard; otherwise, paste the contents of the clipboard.
 ///   * `ignore` - Do nothing, ignore the right-click.
 ///
-/// The default value is `context-menu`.
-@"right-click-action": RightClickAction = .@"context-menu",
+/// The default value is `context-menu`, except on Windows where it defaults to `paste`.
+@"right-click-action": RightClickAction = switch (builtin.os.tag) {
+    .windows => .paste,
+    else => .@"context-menu",
+},
 
 /// The time in milliseconds between clicks to consider a click a repeat
 /// (double, triple, etc.) or an entirely new single click. A value of zero will

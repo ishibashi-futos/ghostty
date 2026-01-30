@@ -465,6 +465,54 @@ fn createWindowsEnvBlock(allocator: mem.Allocator, env_map: *const EnvMap) ![]u1
     return try allocator.realloc(result, i);
 }
 
+test "createWindowsEnvBlock basic" {
+    const allocator = testing.allocator;
+    var envmap = EnvMap.init(allocator);
+    defer envmap.deinit();
+
+    try envmap.put("FOO", "bar");
+    try envmap.put("ZED", "zip");
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const block = try createWindowsEnvBlock(arena.allocator(), &envmap);
+
+    var entries = std.ArrayList([]const u8).empty;
+    defer {
+        for (entries.items) |entry| allocator.free(entry);
+        entries.deinit(allocator);
+    }
+
+    var i: usize = 0;
+    var cursor: usize = 0;
+    var saw_terminator = false;
+    while (i < block.len) : (i += 1) {
+        if (block[i] != 0) continue;
+
+        if (i == cursor) {
+            saw_terminator = true;
+            break;
+        }
+
+        const entry_u16 = block[cursor..i];
+        const entry = try std.unicode.utf16LeToUtf8Alloc(allocator, entry_u16);
+        try entries.append(allocator, entry);
+        cursor = i + 1;
+    }
+
+    try testing.expect(saw_terminator);
+    try testing.expectEqual(@as(usize, 2), entries.items.len);
+    try testing.expect(entryContains(entries.items, "FOO=bar"));
+    try testing.expect(entryContains(entries.items, "ZED=zip"));
+}
+
+fn entryContains(entries: []const []const u8, needle: []const u8) bool {
+    for (entries) |entry| {
+        if (mem.eql(u8, entry, needle)) return true;
+    }
+    return false;
+}
+
 /// Copied from Zig. This function could be made public in child_process.zig instead.
 fn windowsCreateCommandLine(allocator: mem.Allocator, argv: []const []const u8) ![:0]u8 {
     var buf: std.Io.Writer.Allocating = .init(allocator);

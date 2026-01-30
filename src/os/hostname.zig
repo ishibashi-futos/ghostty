@@ -1,5 +1,21 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const posix = std.posix;
+const windows = std.os.windows;
+
+const hostname_max = if (builtin.os.tag == .windows) 256 else posix.HOST_NAME_MAX;
+const computer_name_physical_dns_hostname: u32 = 5;
+
+extern "kernel32" fn GetComputerNameExW(
+    name_type: u32,
+    lpBuffer: [*]u16,
+    lpnSize: *u32,
+) callconv(.winapi) windows.BOOL;
+
+extern "kernel32" fn GetComputerNameW(
+    lpBuffer: [*]u16,
+    lpnSize: *u32,
+) callconv(.winapi) windows.BOOL;
 
 pub const LocalHostnameValidationError = error{
     PermissionDenied,
@@ -99,8 +115,8 @@ pub fn isLocal(hostname: []const u8) LocalHostnameValidationError!bool {
     if (std.mem.eql(u8, "localhost", hostname)) return true;
 
     // If hostname is not "localhost" it must match our hostname.
-    var buf: [posix.HOST_NAME_MAX]u8 = undefined;
-    const ourHostname = try posix.gethostname(&buf);
+    var buf: [hostname_max]u8 = undefined;
+    const ourHostname = try getHostname(&buf);
     return std.mem.eql(u8, hostname, ourHostname);
 }
 
@@ -109,8 +125,8 @@ test "isLocal returns true when provided hostname is localhost" {
 }
 
 test "isLocal returns true when hostname is local" {
-    var buf: [posix.HOST_NAME_MAX]u8 = undefined;
-    const localHostname = try posix.gethostname(&buf);
+    var buf: [hostname_max]u8 = undefined;
+    const localHostname = try getHostname(&buf);
     try std.testing.expect(try isLocal(localHostname));
 }
 
@@ -119,4 +135,27 @@ test "isLocal returns false when hostname is not local" {
         false,
         try isLocal("not-the-local-hostname"),
     );
+}
+
+fn getHostname(buf: []u8) LocalHostnameValidationError![]u8 {
+    if (comptime builtin.os.tag == .windows) {
+        var buf_w: [hostname_max]u16 = undefined;
+        var len: u32 = buf_w.len;
+        if (GetComputerNameExW(computer_name_physical_dns_hostname, &buf_w, &len) == 0) {
+            len = buf_w.len;
+            if (GetComputerNameW(&buf_w, &len) == 0) {
+                return error.Unexpected;
+            }
+        }
+
+        const utf16 = buf_w[0..len];
+        const written = std.unicode.utf16LeToUtf8(buf, utf16) catch return error.Unexpected;
+        return buf[0..written];
+    }
+
+    var tmp: [posix.HOST_NAME_MAX]u8 = undefined;
+    const hostname = try posix.gethostname(&tmp);
+    if (hostname.len > buf.len) return error.Unexpected;
+    @memcpy(buf[0..hostname.len], hostname);
+    return buf[0..hostname.len];
 }

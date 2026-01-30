@@ -27,6 +27,7 @@ pub const Sprite = sprite.Sprite;
 pub const SpriteFace = sprite.Face;
 pub const Descriptor = discovery.Descriptor;
 pub const Discover = discovery.Discover;
+pub const initDiscover = discovery.initDiscover;
 pub const Library = library.Library;
 
 // If we're targeting wasm then we export some wasm APIs.

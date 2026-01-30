@@ -39,6 +39,35 @@ const grapheme_count_default = GraphemeAlloc.bitmap_bit_size;
 pub const grapheme_bytes_default = grapheme_count_default * grapheme_chunk;
 const GraphemeMap = AutoOffsetHashMap(Offset(Cell), Offset(u21).Slice);
 
+fn allocPageMemory(total_size: usize) ![]align(std.heap.page_size_min) u8 {
+    if (comptime builtin.os.tag == .windows) {
+        const buf = try std.heap.page_allocator.alignedAlloc(
+            u8,
+            std.mem.Alignment.fromByteUnits(std.heap.page_size_min),
+            total_size,
+        );
+        @memset(buf, 0);
+        return buf;
+    }
+
+    return try posix.mmap(
+        null,
+        total_size,
+        posix.PROT.READ | posix.PROT.WRITE,
+        .{ .TYPE = .PRIVATE, .ANONYMOUS = true },
+        -1,
+        0,
+    );
+}
+
+fn freePageMemory(buf: []align(std.heap.page_size_min) u8) void {
+    if (comptime builtin.os.tag == .windows) {
+        std.heap.page_allocator.free(buf);
+    } else {
+        posix.munmap(buf);
+    }
+}
+
 /// The allocator used for shared utf8-encoded strings within a page.
 /// Note the chunk size below is the minimum size of a single allocation
 /// and requires a single bit of metadata in our bitmap allocator. Therefore
@@ -172,15 +201,8 @@ pub const Page = struct {
         // anonymous mmap is guaranteed on Linux and macOS to be zeroed,
         // which is a critical property for us.
         assert(l.total_size % std.heap.page_size_min == 0);
-        const backing = try posix.mmap(
-            null,
-            l.total_size,
-            posix.PROT.READ | posix.PROT.WRITE,
-            .{ .TYPE = .PRIVATE, .ANONYMOUS = true },
-            -1,
-            0,
-        );
-        errdefer posix.munmap(backing);
+        const backing = try allocPageMemory(l.total_size);
+        errdefer freePageMemory(backing);
 
         const buf = OffsetBuf.init(backing);
         return initBuf(buf, l);
@@ -245,7 +267,7 @@ pub const Page = struct {
     /// this if you allocated the backing memory yourself (i.e. you used
     /// initBuf).
     pub inline fn deinit(self: *Page) void {
-        posix.munmap(self.memory);
+        freePageMemory(self.memory);
         self.* = undefined;
     }
 
@@ -578,15 +600,8 @@ pub const Page = struct {
     /// using the page allocator. If you want to manage memory manually,
     /// use cloneBuf.
     pub inline fn clone(self: *const Page) !Page {
-        const backing = try posix.mmap(
-            null,
-            self.memory.len,
-            posix.PROT.READ | posix.PROT.WRITE,
-            .{ .TYPE = .PRIVATE, .ANONYMOUS = true },
-            -1,
-            0,
-        );
-        errdefer posix.munmap(backing);
+        const backing = try allocPageMemory(self.memory.len);
+        errdefer freePageMemory(backing);
         return self.cloneBuf(backing);
     }
 

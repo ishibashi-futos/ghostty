@@ -329,6 +329,16 @@ const WindowsPty = struct {
         }
         errdefer _ = windows.CloseHandle(pty.in_pipe_pty);
 
+        // Finish connecting the server end of the named pipe. The client
+        // connect above should already be pending, so we expect either
+        // success or ERROR_PIPE_CONNECTED.
+        if (windows.exp.kernel32.ConnectNamedPipe(pty.in_pipe, null) == 0) {
+            const err = windows.kernel32.GetLastError();
+            if (err != windows.exp.ERROR_PIPE_CONNECTED) {
+                return windows.unexpectedError(err);
+            }
+        }
+
         // The in_pipe needs to be created as a named pipe, since anonymous
         // pipes created with CreatePipe do not support overlapped operations,
         // and the IOCP backend of libxev only uses overlapped operations on files.

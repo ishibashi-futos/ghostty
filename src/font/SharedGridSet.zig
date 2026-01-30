@@ -442,7 +442,7 @@ fn discover(self: *SharedGridSet) !?*Discover {
     // If we initialized, use it
     if (self.font_discover) |*v| return v;
 
-    self.font_discover = try .init();
+    self.font_discover = try discovery.initDiscover();
     return &self.font_discover.?;
 }
 

@@ -38,6 +38,9 @@ const WM_MBUTTONUP: win.UINT = 0x0208;
 const WM_MOUSEWHEEL: win.UINT = 0x020A;
 const WM_APP: win.UINT = 0x8000;
 const WM_DPICHANGED: win.UINT = 0x02E0;
+const SIZE_RESTORED: win.WPARAM = 0;
+const SIZE_MINIMIZED: win.WPARAM = 1;
+const SIZE_MAXIMIZED: win.WPARAM = 2;
 const CS_HREDRAW: win.UINT = 0x0002;
 const CS_VREDRAW: win.UINT = 0x0001;
 const WS_OVERLAPPEDWINDOW: win.DWORD = 0x00CF0000;
@@ -463,8 +466,10 @@ fn handleInputMessage(
     const surface = self.surface orelse return false;
     switch (msg) {
         WM_SIZE => {
+            if (wparam == SIZE_MINIMIZED) return true;
             const width = @as(u32, @intCast(@as(u16, @truncate(@as(u64, @bitCast(lparam))))));
             const height = @as(u32, @intCast(@as(u16, @truncate(@as(u64, @bitCast(lparam)) >> 16))));
+            if (width == 0 or height == 0) return true;
             surface.core().sizeCallback(.{
                 .width = width,
                 .height = height,

@@ -58,6 +58,39 @@ pub fn deinit(self: *Exec) void {
     self.subprocess.deinit();
 }
 
+fn closePipeHandle(fd: posix.fd_t) void {
+    if (comptime builtin.os.tag == .windows) {
+        _ = windows.CloseHandle(fd);
+    } else {
+        posix.close(fd);
+    }
+}
+
+fn signalReadThreadPipe(fd: posix.fd_t) void {
+    if (comptime builtin.os.tag == .windows) {
+        var written: windows.DWORD = 0;
+        const quit_byte = [_]u8{'x'};
+        if (windows.kernel32.WriteFile(fd, &quit_byte, quit_byte.len, &written, null) == 0) {
+            const err = windows.kernel32.GetLastError();
+            if (err != .BROKEN_PIPE) {
+                log.warn("error writing to read thread quit pipe err={}", .{err});
+            }
+        }
+    } else {
+        _ = posix.write(fd, "x") catch |err| switch (err) {
+            // BrokenPipe means that our read thread is closed already,
+            // which is completely fine since that is what we were trying
+            // to achieve.
+            error.BrokenPipe => {},
+
+            else => log.warn(
+                "error writing to read thread quit pipe err={}",
+                .{err},
+            ),
+        };
+    }
+}
+
 /// Call to initialize the terminal state as necessary for this backend.
 /// This is called before any termio begins. This should not be called
 /// after termio begins because it may put the internal terminal state
@@ -121,8 +154,8 @@ pub fn threadEnter(
     // Create our pipe that we'll use to kill our read thread.
     // pipe[0] is the read end, pipe[1] is the write end.
     const pipe = try internal_os.pipe();
-    errdefer posix.close(pipe[0]);
-    errdefer posix.close(pipe[1]);
+    errdefer closePipeHandle(pipe[0]);
+    errdefer closePipeHandle(pipe[1]);
 
     // Setup our stream so that we can write.
     var stream = xev.Stream.initFd(pty_fds.write);
@@ -201,17 +234,7 @@ pub fn threadExit(self: *Exec, td: *termio.Termio.ThreadData) void {
     // Quit our read thread after exiting the subprocess so that
     // we don't get stuck waiting for data to stop flowing if it is
     // a particularly noisy process.
-    _ = posix.write(exec.read_thread_pipe, "x") catch |err| switch (err) {
-        // BrokenPipe means that our read thread is closed already,
-        // which is completely fine since that is what we were trying
-        // to achieve.
-        error.BrokenPipe => {},
-
-        else => log.warn(
-            "error writing to read thread quit pipe err={}",
-            .{err},
-        ),
-    };
+    signalReadThreadPipe(exec.read_thread_pipe);
 
     if (comptime builtin.os.tag == .windows) {
         // Interrupt the blocking read so the thread can see the quit message
@@ -537,7 +560,7 @@ pub const ThreadData = struct {
     termios_mode: ptypkg.Mode = .{},
 
     pub fn deinit(self: *ThreadData, alloc: Allocator) void {
-        posix.close(self.read_thread_pipe);
+        closePipeHandle(self.read_thread_pipe);
 
         // Clear our write pools. We know we aren't ever going to do
         // any more IO since we stop our data stream below so we can just
@@ -1241,7 +1264,7 @@ const Subprocess = struct {
 pub const ReadThread = struct {
     fn threadMainPosix(fd: posix.fd_t, io: *termio.Termio, quit: posix.fd_t) void {
         // Always close our end of the pipe when we exit.
-        defer posix.close(quit);
+        defer closePipeHandle(quit);
 
         // Right now, on Darwin, `std.Thread.setName` can only name the current
         // thread, and we have no way to get the current thread from within it,
@@ -1343,7 +1366,7 @@ pub const ReadThread = struct {
 
     fn threadMainWindows(fd: posix.fd_t, io: *termio.Termio, quit: posix.fd_t) void {
         // Always close our end of the pipe when we exit.
-        defer posix.close(quit);
+        defer closePipeHandle(quit);
 
         // Setup our crash metadata
         crash.sentry.thread_state = .{

@@ -2093,7 +2093,7 @@ fn testShaperWithFont(alloc: Allocator, font_req: TestFont) !TestShaper {
         });
     } else {
         // On CoreText we want to load Apple Emoji, we should have it.
-        var disco = font.Discover.init();
+        var disco = try initDiscover();
         defer disco.deinit();
         var disco_it = try disco.discover(alloc, .{
             .family = "Apple Color Emoji",
@@ -2148,7 +2148,7 @@ fn testShaperWithDiscoveredFont(alloc: Allocator, font_req: [:0]const u8) !TestS
 
     // Discover and add our font to the collection.
     {
-        var disco = font.Discover.init();
+        var disco = try initDiscover();
         defer disco.deinit();
         var disco_it = try disco.discover(alloc, .{
             .family = font_req,
@@ -2191,4 +2191,12 @@ fn testShaperWithDiscoveredFont(alloc: Allocator, font_req: [:0]const u8) !TestS
         .grid = grid_ptr,
         .lib = lib,
     };
+}
+
+fn initDiscover() !font.Discover {
+    const ReturnT = @typeInfo(@TypeOf(font.Discover.init)).@"fn".return_type.?;
+    if (@typeInfo(ReturnT) == .error_union) {
+        return try font.Discover.init();
+    }
+    return font.Discover.init();
 }

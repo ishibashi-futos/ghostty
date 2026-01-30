@@ -25,6 +25,14 @@ pub const Discover = switch (options.backend) {
     => CoreText,
 };
 
+pub fn initDiscover() !Discover {
+    const ReturnT = @typeInfo(@TypeOf(Discover.init)).@"fn".return_type.?;
+    if (@typeInfo(ReturnT) == .error_union) {
+        return try Discover.init();
+    }
+    return Discover.init();
+}
+
 /// Descriptor is used to search for fonts. The only required field
 /// is "family". The rest are ignored unless they're set to a non-zero
 /// value.

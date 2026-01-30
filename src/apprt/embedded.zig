@@ -1133,15 +1133,18 @@ pub const Inspector = struct {
         yoff: f64,
         mods: input.ScrollMods,
     ) void {
-        _ = mods;
-
         self.queueRender();
         cimgui.c.ImGui_SetCurrentContext(self.ig_ctx);
         const io: *cimgui.c.ImGuiIO = cimgui.c.ImGui_GetIO();
+
+        // For precision scrolling (trackpads), the values are in pixels which
+        // scroll way too fast. Scale them down to approximate discrete wheel
+        // notches. imgui expects 1.0 to scroll ~5 lines of text.
+        const scale: f64 = if (mods.precision) 0.1 else 1.0;
         cimgui.c.ImGuiIO_AddMouseWheelEvent(
             io,
-            @floatCast(xoff),
-            @floatCast(yoff),
+            @floatCast(xoff * scale),
+            @floatCast(yoff * scale),
         );
     }
 
@@ -1202,10 +1205,11 @@ pub const Inspector = struct {
         // Determine our delta time
         const now = try std.time.Instant.now();
         io.DeltaTime = if (self.instant) |prev| delta: {
-            const since_ns = now.since(prev);
-            const since_s: f32 = @floatFromInt(since_ns / std.time.ns_per_s);
+            const since_ns: f64 = @floatFromInt(now.since(prev));
+            const ns_per_s: f64 = @floatFromInt(std.time.ns_per_s);
+            const since_s: f32 = @floatCast(since_ns / ns_per_s);
             break :delta @max(0.00001, since_s);
-        } else (1 / 60);
+        } else (1.0 / 60.0);
         self.instant = now;
     }
 };
@@ -1751,13 +1755,18 @@ pub const CAPI = struct {
     export fn ghostty_surface_key_is_binding(
         surface: *Surface,
         event: KeyEvent,
+        c_flags: ?*input.Binding.Flags.C,
     ) bool {
         const core_event = event.keyEvent().core() orelse {
             log.warn("error processing key event", .{});
             return false;
         };
 
-        return surface.core_surface.keyEventIsBinding(core_event);
+        const flags = surface.core_surface.keyEventIsBinding(
+            core_event,
+        ) orelse return false;
+        if (c_flags) |ptr| ptr.* = flags.cval();
+        return true;
     }
 
     /// Send raw text to the terminal. This is treated like a paste
@@ -2160,7 +2169,10 @@ pub const CAPI = struct {
                     if (comptime std.debug.runtime_safety) unreachable;
                     return false;
                 };
-                break :sel surface.io.terminal.screens.active.selectWord(pin) orelse return false;
+                break :sel surface.io.terminal.screens.active.selectWord(
+                    pin,
+                    surface.config.selection_word_chars,
+                ) orelse return false;
             };
 
             // Read the selection

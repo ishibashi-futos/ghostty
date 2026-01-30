@@ -17,6 +17,7 @@ const assert = @import("../quirks.zig").inlineAssert;
 const Allocator = std.mem.Allocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
 const global_state = &@import("../global.zig").state;
+const deepEqual = @import("../datastruct/comparison.zig").deepEqual;
 const fontpkg = @import("../font/main.zig");
 const inputpkg = @import("../input.zig");
 const internal_os = @import("../os/main.zig");
@@ -710,6 +711,32 @@ foreground: Color = .{ .r = 0xFF, .g = 0xFF, .b = 0xFF },
 /// to see what was copied and potentially perform additional operations
 /// on the same selection.
 @"selection-clear-on-copy": bool = false,
+
+/// Characters that mark word boundaries during text selection operations such
+/// as double-clicking. When selecting a word, the selection will stop at any
+/// of these characters.
+///
+/// This is similar to the `WORDCHARS` environment variable in zsh, except this
+/// specifies the boundary characters rather than the word characters. The
+/// default includes common delimiters and punctuation that typically separate
+/// words in code and prose.
+///
+/// Each character in this string becomes a word boundary. Multi-byte UTF-8
+/// characters are supported, but only single codepoints can be specified.
+/// Multi-codepoint sequences (e.g. emoji) are not supported.
+///
+/// The null character (U+0000) is always treated as a boundary and does not
+/// need to be included in this configuration.
+///
+/// Default: ` \t'"│`|:;,()[]{}<>$`
+///
+/// To add or remove specific characters, you can set this to a custom value.
+/// For example, to treat semicolons as part of words:
+///
+///     selection-word-chars = " \t'\"│`|:,()[]{}<>$"
+///
+/// Available since: 1.3.0
+@"selection-word-chars": SelectionWordChars = .{},
 
 /// The minimum contrast ratio between the foreground and background colors.
 /// The contrast ratio is a value between 1 and 21. A value of 1 allows for no
@@ -2666,7 +2693,7 @@ keybind: Keybinds = .{},
 ///
 ///   * `detect` - Detect the shell based on the filename.
 ///
-///   * `bash`, `elvish`, `fish`, `zsh` - Use this specific shell injection scheme.
+///   * `bash`, `elvish`, `fish`, `nushell`, `zsh` - Use this specific shell injection scheme.
 ///
 /// The default value is `detect`.
 @"shell-integration": ShellIntegration = .detect,
@@ -2856,6 +2883,24 @@ keybind: Keybinds = .{},
 ///    (e.g., modifier key presses, link hover events in unfocused split panes).
 ///    Check `iFocus > 0` to determine if the surface is currently focused.
 ///
+///  * `vec3 iPalette[256]` - The 256-color terminal palette.
+///
+///    RGB values for all 256 colors in the terminal palette, normalized
+///    to [0.0, 1.0]. Index 0-15 are the ANSI colors, 16-231 are the 6x6x6
+///    color cube, and 232-255 are the grayscale colors.
+///
+///  * `vec3 iBackgroundColor` - Terminal background color (RGB).
+///
+///  * `vec3 iForegroundColor` - Terminal foreground color (RGB).
+///
+///  * `vec3 iCursorColor` - Terminal cursor color (RGB).
+///
+///  * `vec3 iCursorText` - Terminal cursor text color (RGB).
+///
+///  * `vec3 iSelectionBackgroundColor` - Selection background color (RGB).
+///
+///  * `vec3 iSelectionForegroundColor` - Selection foreground color (RGB).
+///
 /// If the shader fails to compile, the shader will be ignored. Any errors
 /// related to shader compilation will not show up as configuration errors
 /// and only show up in the log, since shader compilation happens after
@@ -2934,7 +2979,7 @@ keybind: Keybinds = .{},
 ///    Display a border around the alerted surface until the terminal is
 ///    re-focused or interacted with (such as on keyboard input).
 ///
-///    GTK only.
+///    Available since: 1.2.0 on GTK, 1.2.1 on macOS
 ///
 /// Example: `audio`, `no-audio`, `system`, `no-system`
 ///
@@ -4120,7 +4165,7 @@ pub fn changeConditionalState(
 
             // Conditional set contains the keys that this config uses. So we
             // only continue if we use this key.
-            if (self._conditional_set.contains(key) and !equalField(
+            if (self._conditional_set.contains(key) and !deepEqual(
                 @TypeOf(@field(self._conditional_state, field.name)),
                 @field(self._conditional_state, field.name),
                 @field(new, field.name),
@@ -4826,7 +4871,7 @@ pub fn changed(self: *const Config, new: *const Config, comptime key: Key) bool 
 
     const old_value = @field(self, field.name);
     const new_value = @field(new, field.name);
-    return !equalField(field.type, old_value, new_value);
+    return !deepEqual(field.type, old_value, new_value);
 }
 
 /// This yields a key for every changed field between old and new.
@@ -4853,91 +4898,6 @@ pub const ChangeIterator = struct {
         return null;
     }
 };
-
-/// A config-specific helper to determine if two values of the same
-/// type are equal. This isn't the same as std.mem.eql or std.testing.equals
-/// because we expect structs to implement their own equality.
-///
-/// This also doesn't support ALL Zig types, because we only add to it
-/// as we need types for the config.
-fn equalField(comptime T: type, old: T, new: T) bool {
-    // Do known named types first
-    switch (T) {
-        inline []const u8,
-        [:0]const u8,
-        => return std.mem.eql(u8, old, new),
-
-        []const [:0]const u8,
-        => {
-            if (old.len != new.len) return false;
-            for (old, new) |a, b| {
-                if (!std.mem.eql(u8, a, b)) return false;
-            }
-
-            return true;
-        },
-
-        else => {},
-    }
-
-    // Back into types of types
-    switch (@typeInfo(T)) {
-        .void => return true,
-
-        inline .bool,
-        .int,
-        .float,
-        .@"enum",
-        => return old == new,
-
-        .optional => |info| {
-            if (old == null and new == null) return true;
-            if (old == null or new == null) return false;
-            return equalField(info.child, old.?, new.?);
-        },
-
-        .@"struct" => |info| {
-            if (@hasDecl(T, "equal")) return old.equal(new);
-
-            // If a struct doesn't declare an "equal" function, we fall back
-            // to a recursive field-by-field compare.
-            inline for (info.fields) |field_info| {
-                if (!equalField(
-                    field_info.type,
-                    @field(old, field_info.name),
-                    @field(new, field_info.name),
-                )) return false;
-            }
-            return true;
-        },
-
-        .@"union" => |info| {
-            if (@hasDecl(T, "equal")) return old.equal(new);
-
-            const tag_type = info.tag_type.?;
-            const old_tag = std.meta.activeTag(old);
-            const new_tag = std.meta.activeTag(new);
-            if (old_tag != new_tag) return false;
-
-            inline for (info.fields) |field_info| {
-                if (@field(tag_type, field_info.name) == old_tag) {
-                    return equalField(
-                        field_info.type,
-                        @field(old, field_info.name),
-                        @field(new, field_info.name),
-                    );
-                }
-            }
-
-            unreachable;
-        },
-
-        else => {
-            @compileLog(T);
-            @compileError("unsupported field type");
-        },
-    }
-}
 
 /// This runs a heuristic to determine if we are likely running
 /// Ghostty in a CLI environment. We need this to change some behaviors.
@@ -5849,6 +5809,113 @@ pub const RepeatableString = struct {
     }
 };
 
+/// SelectionWordChars stores the parsed codepoints for word boundary
+/// characters used during text selection. The string is parsed once
+/// during configuration and stored as u21 codepoints for efficient
+/// lookup during selection operations.
+pub const SelectionWordChars = struct {
+    const Self = @This();
+
+    /// Default boundary characters: ` \t'"│`|:;,()[]{}<>$`
+    const default_codepoints = [_]u21{
+        0, // null
+        ' ', // space
+        '\t', // tab
+        '\'', // single quote
+        '"', // double quote
+        '│', // U+2502 box drawing
+        '`', // backtick
+        '|', // pipe
+        ':', // colon
+        ';', // semicolon
+        ',', // comma
+        '(', // left paren
+        ')', // right paren
+        '[', // left bracket
+        ']', // right bracket
+        '{', // left brace
+        '}', // right brace
+        '<', // less than
+        '>', // greater than
+        '$', // dollar
+    };
+
+    /// The parsed codepoints. Always includes null (U+0000) at index 0.
+    codepoints: []const u21 = &default_codepoints,
+
+    pub fn parseCLI(self: *Self, alloc: Allocator, input: ?[]const u8) !void {
+        const value = input orelse return error.ValueRequired;
+
+        // Parse UTF-8 string into codepoints
+        var list: std.ArrayList(u21) = .empty;
+        defer list.deinit(alloc);
+
+        // Always include null as first boundary
+        try list.append(alloc, 0);
+
+        // Parse the UTF-8 string
+        const utf8_view = std.unicode.Utf8View.init(value) catch {
+            // Invalid UTF-8, just use null boundary
+            self.codepoints = try list.toOwnedSlice(alloc);
+            return;
+        };
+
+        var utf8_it = utf8_view.iterator();
+        while (utf8_it.nextCodepoint()) |codepoint| {
+            try list.append(alloc, codepoint);
+        }
+
+        self.codepoints = try list.toOwnedSlice(alloc);
+    }
+
+    /// Deep copy of the struct. Required by Config.
+    pub fn clone(self: *const Self, alloc: Allocator) Allocator.Error!Self {
+        const copy = try alloc.dupe(u21, self.codepoints);
+        return .{ .codepoints = copy };
+    }
+
+    /// Compare if two values are equal. Required by Config.
+    pub fn equal(self: Self, other: Self) bool {
+        return std.mem.eql(u21, self.codepoints, other.codepoints);
+    }
+
+    /// Used by Formatter
+    pub fn formatEntry(self: Self, formatter: formatterpkg.EntryFormatter) !void {
+        // Convert codepoints back to UTF-8 string for display
+        var buf: [4096]u8 = undefined;
+        var pos: usize = 0;
+
+        // Skip the null character at index 0
+        for (self.codepoints[1..]) |codepoint| {
+            var utf8_buf: [4]u8 = undefined;
+            const len = std.unicode.utf8Encode(codepoint, &utf8_buf) catch continue;
+            if (pos + len > buf.len) break;
+            @memcpy(buf[pos..][0..len], utf8_buf[0..len]);
+            pos += len;
+        }
+
+        try formatter.formatEntry([]const u8, buf[0..pos]);
+    }
+
+    test "parseCLI" {
+        const testing = std.testing;
+        var arena = ArenaAllocator.init(testing.allocator);
+        defer arena.deinit();
+        const alloc = arena.allocator();
+
+        var chars: Self = .{};
+        try chars.parseCLI(alloc, " \t;,");
+
+        // Should have null + 4 characters
+        try testing.expectEqual(@as(usize, 5), chars.codepoints.len);
+        try testing.expectEqual(@as(u21, 0), chars.codepoints[0]);
+        try testing.expectEqual(@as(u21, ' '), chars.codepoints[1]);
+        try testing.expectEqual(@as(u21, '\t'), chars.codepoints[2]);
+        try testing.expectEqual(@as(u21, ';'), chars.codepoints[3]);
+        try testing.expectEqual(@as(u21, ','), chars.codepoints[4]);
+    }
+};
+
 /// FontVariation is a repeatable configuration value that sets a single
 /// font variation value. Font variations are configurations for what
 /// are often called "variable fonts." The font files usually end in
@@ -6060,7 +6127,7 @@ pub const Keybinds = struct {
         // set the expected keybind for the menu.
         try self.set.put(
             alloc,
-            .{ .key = .{ .physical = .equal }, .mods = inputpkg.ctrlOrSuper(.{}) },
+            .{ .key = .{ .unicode = '=' }, .mods = inputpkg.ctrlOrSuper(.{}) },
             .{ .increase_font_size = 1 },
         );
         try self.set.put(
@@ -6228,13 +6295,13 @@ pub const Keybinds = struct {
             );
             try self.set.putFlags(
                 alloc,
-                .{ .key = .{ .physical = .bracket_left }, .mods = .{ .ctrl = true, .super = true } },
+                .{ .key = .{ .unicode = '[' }, .mods = .{ .ctrl = true, .super = true } },
                 .{ .goto_split = .previous },
                 .{ .performable = true },
             );
             try self.set.putFlags(
                 alloc,
-                .{ .key = .{ .physical = .bracket_right }, .mods = .{ .ctrl = true, .super = true } },
+                .{ .key = .{ .unicode = ']' }, .mods = .{ .ctrl = true, .super = true } },
                 .{ .goto_split = .next },
                 .{ .performable = true },
             );
@@ -6560,12 +6627,12 @@ pub const Keybinds = struct {
             );
             try self.set.put(
                 alloc,
-                .{ .key = .{ .physical = .bracket_left }, .mods = .{ .super = true, .shift = true } },
+                .{ .key = .{ .unicode = '[' }, .mods = .{ .super = true, .shift = true } },
                 .{ .previous_tab = {} },
             );
             try self.set.put(
                 alloc,
-                .{ .key = .{ .physical = .bracket_right }, .mods = .{ .super = true, .shift = true } },
+                .{ .key = .{ .unicode = ']' }, .mods = .{ .super = true, .shift = true } },
                 .{ .next_tab = {} },
             );
             try self.set.put(
@@ -6580,12 +6647,12 @@ pub const Keybinds = struct {
             );
             try self.set.put(
                 alloc,
-                .{ .key = .{ .physical = .bracket_left }, .mods = .{ .super = true } },
+                .{ .key = .{ .unicode = '[' }, .mods = .{ .super = true } },
                 .{ .goto_split = .previous },
             );
             try self.set.put(
                 alloc,
-                .{ .key = .{ .physical = .bracket_right }, .mods = .{ .super = true } },
+                .{ .key = .{ .unicode = ']' }, .mods = .{ .super = true } },
                 .{ .goto_split = .next },
             );
             try self.set.put(
@@ -6630,7 +6697,7 @@ pub const Keybinds = struct {
             );
             try self.set.put(
                 alloc,
-                .{ .key = .{ .physical = .equal }, .mods = .{ .super = true, .ctrl = true } },
+                .{ .key = .{ .unicode = '=' }, .mods = .{ .super = true, .ctrl = true } },
                 .{ .equalize_splits = {} },
             );
 
@@ -6887,7 +6954,7 @@ pub const Keybinds = struct {
                     const self_leaf = self_entry.value_ptr.*.leaf;
                     const other_leaf = other_entry.value_ptr.*.leaf;
 
-                    if (!equalField(
+                    if (!deepEqual(
                         inputpkg.Binding.Set.Leaf,
                         self_leaf,
                         other_leaf,
@@ -6901,7 +6968,7 @@ pub const Keybinds = struct {
                     if (self_chain.flags != other_chain.flags) return false;
                     if (self_chain.actions.items.len != other_chain.actions.items.len) return false;
                     for (self_chain.actions.items, other_chain.actions.items) |a1, a2| {
-                        if (!equalField(
+                        if (!deepEqual(
                             inputpkg.Binding.Action,
                             a1,
                             a2,
@@ -6916,7 +6983,7 @@ pub const Keybinds = struct {
 
     /// Like formatEntry but has an option to include docs.
     pub fn formatEntryDocs(self: Keybinds, formatter: formatterpkg.EntryFormatter, docs: bool) !void {
-        if (self.set.bindings.size == 0 and self.tables.count() == 0) {
+        if (self.set.bindings.count() == 0 and self.tables.count() == 0) {
             try formatter.formatEntry(void, {});
             return;
         }
@@ -7018,8 +7085,8 @@ pub const Keybinds = struct {
         // Note they turn into translated keys because they match
         // their ASCII mapping.
         const want =
-            \\keybind = ctrl+z>2=goto_tab:2
             \\keybind = ctrl+z>1=goto_tab:1
+            \\keybind = ctrl+z>2=goto_tab:2
             \\
         ;
         try std.testing.expectEqualStrings(want, buf.written());
@@ -7043,9 +7110,9 @@ pub const Keybinds = struct {
 
         // NB: This does not currently retain the order of the keybinds.
         const want =
-            \\a = ctrl+a>ctrl+c>t=new_tab
-            \\a = ctrl+a>ctrl+b>w=close_window
             \\a = ctrl+a>ctrl+b>n=new_window
+            \\a = ctrl+a>ctrl+b>w=close_window
+            \\a = ctrl+a>ctrl+c>t=new_tab
             \\a = ctrl+b>ctrl+d>a=previous_tab
             \\
         ;
@@ -8113,6 +8180,7 @@ pub const ShellIntegration = enum {
     bash,
     elvish,
     fish,
+    nushell,
     zsh,
 };
 

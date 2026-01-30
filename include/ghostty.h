@@ -66,6 +66,14 @@ typedef enum {
   GHOSTTY_MOUSE_LEFT,
   GHOSTTY_MOUSE_RIGHT,
   GHOSTTY_MOUSE_MIDDLE,
+  GHOSTTY_MOUSE_FOUR,
+  GHOSTTY_MOUSE_FIVE,
+  GHOSTTY_MOUSE_SIX,
+  GHOSTTY_MOUSE_SEVEN,
+  GHOSTTY_MOUSE_EIGHT,
+  GHOSTTY_MOUSE_NINE,
+  GHOSTTY_MOUSE_TEN,
+  GHOSTTY_MOUSE_ELEVEN,
 } ghostty_input_mouse_button_e;
 
 typedef enum {
@@ -101,6 +109,13 @@ typedef enum {
   GHOSTTY_MODS_ALT_RIGHT = 1 << 8,
   GHOSTTY_MODS_SUPER_RIGHT = 1 << 9,
 } ghostty_input_mods_e;
+
+typedef enum {
+  GHOSTTY_BINDING_FLAGS_CONSUMED = 1 << 0,
+  GHOSTTY_BINDING_FLAGS_ALL = 1 << 1,
+  GHOSTTY_BINDING_FLAGS_GLOBAL = 1 << 2,
+  GHOSTTY_BINDING_FLAGS_PERFORMABLE = 1 << 3,
+} ghostty_binding_flags_e;
 
 typedef enum {
   GHOSTTY_ACTION_RELEASE,
@@ -1009,6 +1024,7 @@ ghostty_config_t ghostty_config_new();
 void ghostty_config_free(ghostty_config_t);
 ghostty_config_t ghostty_config_clone(ghostty_config_t);
 void ghostty_config_load_cli_args(ghostty_config_t);
+void ghostty_config_load_file(ghostty_config_t, const char*);
 void ghostty_config_load_default_files(ghostty_config_t);
 void ghostty_config_load_recursive_files(ghostty_config_t);
 void ghostty_config_finalize(ghostty_config_t);
@@ -1058,7 +1074,9 @@ void ghostty_surface_set_color_scheme(ghostty_surface_t,
 ghostty_input_mods_e ghostty_surface_key_translation_mods(ghostty_surface_t,
                                                           ghostty_input_mods_e);
 bool ghostty_surface_key(ghostty_surface_t, ghostty_input_key_s);
-bool ghostty_surface_key_is_binding(ghostty_surface_t, ghostty_input_key_s);
+bool ghostty_surface_key_is_binding(ghostty_surface_t,
+                                    ghostty_input_key_s,
+                                    ghostty_binding_flags_e*);
 void ghostty_surface_text(ghostty_surface_t, const char*, uintptr_t);
 void ghostty_surface_preedit(ghostty_surface_t, const char*, uintptr_t);
 bool ghostty_surface_mouse_captured(ghostty_surface_t);
